@@ -1,5 +1,5 @@
 pub mod game;
-pub mod vault;
+pub mod player;
 
 pub use game::*;
-pub use vault::*;
+pub use player::*;
