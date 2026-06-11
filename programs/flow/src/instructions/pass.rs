@@ -3,11 +3,12 @@ use crate::errors::FlowError;
 use crate::state::*;
 use crate::utils::read_price;
 use anchor_lang::prelude::*;
+use session_keys::{session_auth_or, Session, SessionError, SessionToken};
 
-#[derive(Accounts)]
+#[derive(Accounts, Session)]
 pub struct Pass<'info> {
     // current holder
-    pub current_holder: Signer<'info>,
+    pub signer: Signer<'info>,
 
     #[account(
            mut,
@@ -20,9 +21,9 @@ pub struct Pass<'info> {
     // used to read price_at_receive and index
     #[account(
            mut,
-           seeds = [PLAYER_SEED, game.key().as_ref(), current_holder.key().as_ref()],
+           seeds = [PLAYER_SEED, game.key().as_ref(), game.current_holder.as_ref()],
            bump  = holder_player.bump,
-           constraint = holder_player.wallet == current_holder.key() @ FlowError::NotCurrentHolder,
+           constraint = holder_player.wallet == signer.key() @ FlowError::NotCurrentHolder,
        )]
     pub holder_player: Account<'info, PlayerAccount>,
 
@@ -35,20 +36,33 @@ pub struct Pass<'info> {
        )]
     pub next_player: Account<'info, PlayerAccount>,
 
+    // session token — validated by #[session_auth_or]
+    // payer = session ephemeral key
+    // authority = current_holder wallet
+    #[session(
+           signer = signer,
+           authority = game.current_holder.key()
+       )]
+    pub session_token: Option<Account<'info, SessionToken>>,
+
     /// CHECK: Pyth Lazer SOL price feed
     pub price_feed: AccountInfo<'info>,
 }
 
+#[session_auth_or(
+    ctx.accounts.game.current_holder == ctx.accounts.signer.key(),
+    SessionError::InvalidToken
+)]
 pub fn handler(ctx: Context<Pass>) -> Result<()> {
     let game = &mut ctx.accounts.game;
 
     require!(game.status == GameStatus::Active, FlowError::GameNotActive);
     require!(
-        ctx.accounts.current_holder.key() == game.current_holder,
+        ctx.accounts.signer.key() == game.current_holder || ctx.accounts.session_token.is_some(),
         FlowError::NotCurrentHolder
     );
     require!(
-        ctx.accounts.current_holder.key() != ctx.accounts.next_player.wallet,
+        ctx.accounts.signer.key() != ctx.accounts.next_player.wallet,
         FlowError::CannotPassToSelf
     );
 

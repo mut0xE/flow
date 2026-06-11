@@ -14,8 +14,6 @@ use state::*;
 #[program]
 pub mod flow {
 
-    use crate::instructions::{join_game, start_game};
-
     use super::*;
 
     pub fn create_game(
@@ -39,5 +37,13 @@ pub mod flow {
 
     pub fn delegate_account(ctx: Context<DelegateInput>, account_type: AccountType) -> Result<()> {
         delegate::delegate(ctx, account_type)
+    }
+
+    pub fn schedule_tick(ctx: Context<ScheduleTick>, args: ScheduleTickArgs) -> Result<()> {
+        tick_price::schedule_tick_handler(ctx, args)
+    }
+
+    pub fn tick_price(ctx: Context<TickPrice>) -> Result<()> {
+        tick_price::tick_price_handler(ctx)
     }
 }

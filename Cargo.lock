@@ -757,7 +757,7 @@ dependencies = [
  "magicblock-delegation-program",
  "magicblock-magic-program-api",
  "solana-program 2.3.0",
- "solana-system-interface 1.0.0",
+ "solana-system-interface 2.0.0",
 ]
 
 [[package]]
@@ -903,7 +903,9 @@ name = "flow"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "bincode",
  "ephemeral-rollups-sdk",
+ "magicblock-magic-program-api",
  "pyth-solana-receiver-sdk",
  "session-keys",
 ]
@@ -3144,6 +3146,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e1790547bfc3061f1ee68ea9d8dc6c973c02a163697b24263a8e9f2e6d4afa2"
 dependencies = [
  "num-traits",
+ "serde",
+ "serde_derive",
+ "solana-instruction 3.4.0",
  "solana-msg 3.1.0",
  "solana-program-error 3.0.1",
  "solana-pubkey 3.0.0",
