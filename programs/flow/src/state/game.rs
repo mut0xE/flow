@@ -46,7 +46,8 @@ impl GameState {
         + 8             // created_at
         + 8             // started_at
         + 8             // ends_at
-        + 1; // bump
+        + 1 // bump
+        + 1; // vault_bump
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq)]

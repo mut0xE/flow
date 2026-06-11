@@ -4,8 +4,7 @@ pub const PLAYER_SEED: &'static [u8] = b"player";
 
 pub const MAX_PLAYERS: u8 = 8;
 pub const MIN_PLAYERS: u8 = 2;
-
-pub const PRICE_BYTE_OFFSET: usize = 73;
+pub const MAX_PRICE_AGE: u64 = 60;
 
 // Pyth Lazer price program
 pub const PRICE_PROGRAM_ID: &str = "PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd";

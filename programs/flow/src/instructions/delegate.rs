@@ -34,17 +34,13 @@ pub fn delegate(ctx: Context<DelegateInput>, account_type: AccountType) -> Resul
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub enum AccountType {
-    GameState { creator: Pubkey, game: Pubkey },
+    GameState { creator: Pubkey },
 }
 
 pub fn derive_seeds_from_account_type(account_type: &AccountType) -> Vec<Vec<u8>> {
     match account_type {
-        AccountType::GameState { creator, game } => {
-            vec![
-                GAME_SEED.to_vec(),
-                creator.as_ref().to_vec(),
-                game.as_ref().to_vec(),
-            ]
+        AccountType::GameState { creator } => {
+            vec![GAME_SEED.to_vec(), creator.as_ref().to_vec()]
         }
     }
 }
