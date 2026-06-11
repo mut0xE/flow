@@ -37,4 +37,7 @@ pub enum FlowError {
 
     #[msg("Timer has not expired yet")]
     TimerNotExpired,
+
+    #[msg("OverFlow")]
+    OverFlow,
 }
