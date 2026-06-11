@@ -14,7 +14,7 @@ use state::*;
 #[program]
 pub mod flow {
 
-    use crate::instructions::join_game;
+    use crate::instructions::{join_game, start_game};
 
     use super::*;
 
@@ -31,6 +31,10 @@ pub mod flow {
 
     pub fn join_game(ctx: Context<JoinGame>) -> Result<()> {
         join_game::handler(ctx)
+    }
+
+    pub fn start_game(ctx: Context<StartGame>) -> Result<()> {
+        start_game::handler(ctx)
     }
 
     pub fn delegate_account(ctx: Context<DelegateInput>, account_type: AccountType) -> Result<()> {

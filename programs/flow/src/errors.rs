@@ -40,4 +40,7 @@ pub enum FlowError {
 
     #[msg("OverFlow")]
     OverFlow,
+
+    #[msg("Not all players have joined yet")]
+    GameNotReady,
 }
