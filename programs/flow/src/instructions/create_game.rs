@@ -73,6 +73,7 @@ pub fn handler(
         ends_at,
         bump: ctx.bumps.game,
         vault_bump: ctx.bumps.vault,
+        final_price: 0,
     });
 
     // transfer entry fee to vault PDA

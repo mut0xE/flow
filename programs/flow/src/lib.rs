@@ -46,4 +46,10 @@ pub mod flow {
     pub fn tick_price(ctx: Context<TickPrice>) -> Result<()> {
         tick_price::tick_price_handler(ctx)
     }
+
+    pub fn commit_and_settle<'info>(
+        ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>,
+    ) -> Result<()> {
+        commit_and_settle::handler(ctx)
+    }
 }

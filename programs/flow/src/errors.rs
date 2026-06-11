@@ -46,4 +46,10 @@ pub enum FlowError {
 
     #[msg("Cannot pass to yourself")]
     CannotPassToSelf,
+
+    #[msg("Invalid player count in remaining accounts")]
+    InvalidPlayerCount,
+
+    #[msg("Invalid player account")]
+    InvalidPlayer,
 }

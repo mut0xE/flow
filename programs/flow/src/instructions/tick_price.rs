@@ -136,6 +136,7 @@ pub fn tick_price_handler(ctx: Context<TickPrice>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     if now >= game.ends_at {
         game.status = GameStatus::Ended;
+        game.final_price = price;
         msg!("FLOW: Timer expired. Game ended.");
         return Ok(());
     }
@@ -149,6 +150,7 @@ pub fn tick_price_handler(ctx: Context<TickPrice>) -> Result<()> {
         &game.direction,
     ) {
         game.status = GameStatus::Ended;
+        game.final_price = price;
         msg!("FLOW: Loss limit hit. Game ended.");
     }
 

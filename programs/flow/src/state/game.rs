@@ -17,6 +17,7 @@ pub struct GameState {
     // live state
     pub status: GameStatus,
     pub current_holder: Pubkey,
+    pub final_price: i64,
 
     pub start_price: i64,
     pub sol_price_now: i64,
@@ -41,6 +42,7 @@ impl GameState {
         + (4 + 8 * 8)   // scores vec max 8
         + 1             // status
         + 32            // current_holder
+        + 8
         + 8             // start_price
         + 8             // sol_price_now
         + 8             // created_at

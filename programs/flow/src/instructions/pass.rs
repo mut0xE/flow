@@ -95,7 +95,7 @@ pub fn handler(ctx: Context<Pass>) -> Result<()> {
     Ok(())
 }
 
-fn calculate_score(price_at_receive: i64, price_now: i64, direction: &Direction) -> i64 {
+pub fn calculate_score(price_at_receive: i64, price_now: i64, direction: &Direction) -> i64 {
     if price_at_receive == 0 {
         return 0;
     }
