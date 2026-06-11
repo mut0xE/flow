@@ -27,6 +27,7 @@ pub struct GameState {
     pub ends_at: i64,
 
     pub bump: u8,
+    pub vault_bump: u8,
 }
 impl GameState {
     pub const SPACE: usize = 8 // discriminator

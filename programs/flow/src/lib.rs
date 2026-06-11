@@ -4,17 +4,30 @@ mod errors;
 mod instructions;
 mod state;
 
-declare_id!("7jDDWFYbst3eavUKbvDYh9HzYY1BgAHXaRGyrUS4owuG");
+declare_id!("FxDoKzGEKbeorKGj1rCQukcCKLuKcYYrHD3S7x8Grwec");
 
+use ephemeral_rollups_sdk::anchor::ephemeral;
+use instructions::*;
+use state::*;
+
+#[ephemeral]
 #[program]
 pub mod flow {
+
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        msg!("Greetings from: {:?}", ctx.program_id);
-        Ok(())
+    pub fn create_game(
+        ctx: Context<CreateGame>,
+        direction: Direction,
+        entry_fee: u64,
+        loss_limit: u8,
+        max_players: u8,
+        ends_at: i64,
+    ) -> Result<()> {
+        create_game::handler(ctx, direction, entry_fee, loss_limit, max_players, ends_at)
+    }
+
+    pub fn delegate_account(ctx: Context<DelegateInput>, account_type: AccountType) -> Result<()> {
+        delegate::delegate(ctx, account_type)
     }
 }
-
-#[derive(Accounts)]
-pub struct Initialize {}
