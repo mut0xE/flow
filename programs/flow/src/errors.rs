@@ -43,4 +43,7 @@ pub enum FlowError {
 
     #[msg("Not all players have joined yet")]
     GameNotReady,
+
+    #[msg("Cannot pass to yourself")]
+    CannotPassToSelf,
 }

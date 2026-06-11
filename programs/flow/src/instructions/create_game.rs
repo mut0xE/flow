@@ -62,7 +62,7 @@ pub fn handler(
         loss_limit,
         max_players,
         player_count: 1,
-        yields: vec![0i64; max_players as usize],
+        scores: vec![0i64; max_players as usize],
         total_deposited: entry_fee,
         status: GameStatus::Waiting,
         current_holder: ctx.accounts.creator.key(),

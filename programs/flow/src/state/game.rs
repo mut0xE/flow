@@ -11,7 +11,7 @@ pub struct GameState {
 
     // players
     pub player_count: u8,
-    pub yields: Vec<i64>,
+    pub scores: Vec<i64>,
     pub total_deposited: u64,
 
     // live state
@@ -38,7 +38,7 @@ impl GameState {
         + 1             // max_players
         + 1             // player_count
         + 8             // total_deposited
-        + (4 + 8 * 8)   // yields vec max 8
+        + (4 + 8 * 8)   // scores vec max 8
         + 1             // status
         + 32            // current_holder
         + 8             // start_price
