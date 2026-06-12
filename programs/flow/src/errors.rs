@@ -52,4 +52,19 @@ pub enum FlowError {
 
     #[msg("Invalid player account")]
     InvalidPlayer,
+
+    #[msg("Duplicate player account")]
+    DuplicatePlayer,
+
+    #[msg("Missing player account")]
+    MissingPlayer,
+
+    #[msg("Invalid treasury account")]
+    InvalidTreasury,
+
+    #[msg("Scores length mismatch")]
+    InvalidScores,
+
+    #[msg("Invalid State")]
+    InvalidState,
 }

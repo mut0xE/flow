@@ -47,9 +47,17 @@ pub mod flow {
         tick_price::tick_price_handler(ctx)
     }
 
+    pub fn pass(ctx: Context<Pass>) -> Result<()> {
+        pass::handler(ctx)
+    }
+
     pub fn commit_and_settle<'info>(
         ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>,
     ) -> Result<()> {
         commit_and_settle::handler(ctx)
+    }
+
+    pub fn settle<'info>(ctx: Context<'_, '_, 'info, 'info, Settle<'info>>) -> Result<()> {
+        settle::handler(ctx)
     }
 }

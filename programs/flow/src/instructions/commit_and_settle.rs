@@ -42,6 +42,8 @@ pub struct CommitAndSettle<'info> {
 
     /// CHECK: Pyth Lazer SOL price feed
     pub price_feed: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>) -> Result<()> {
@@ -51,7 +53,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>
     require!(game.status == GameStatus::Ended, FlowError::GameNotEnded);
 
     require!(
-        ctx.remaining_accounts.len() == game.player_count as usize,
+        ctx.remaining_accounts.len() == game.player_count as usize * 2,
         FlowError::InvalidPlayerCount
     );
 
@@ -76,11 +78,20 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>
             pubkey: ctx.accounts.vault.key().to_bytes().into(),
             is_writable: true,
         },
+        ShortAccountMeta {
+            pubkey: ctx.accounts.system_program.key().to_bytes().into(),
+            is_writable: false,
+        },
     ];
 
-    for account_info in ctx.remaining_accounts.iter() {
-        let player_account = Account::<PlayerAccount>::try_from(account_info)?;
+    for i in (0..ctx.remaining_accounts.len()).step_by(2) {
+        let player_pda_info = &ctx.remaining_accounts[i];
+        let wallet_info = &ctx.remaining_accounts[i + 1];
 
+        // deserialize PlayerAccount
+        let player_account = Account::<PlayerAccount>::try_from(player_pda_info)?;
+
+        // validate PDA
         let (expected_pda, _) = Pubkey::find_program_address(
             &[
                 PLAYER_SEED,
@@ -90,25 +101,37 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>
             &crate::ID,
         );
 
-        require_keys_eq!(player_account.game, game.key(), FlowError::InvalidPlayer);
+        require!(
+            expected_pda == player_pda_info.key(),
+            FlowError::InvalidPlayer
+        );
 
-        require_keys_eq!(expected_pda, player_account.key(), FlowError::InvalidPlayer);
+        // validate wallet matches what's in PlayerAccount
+        require!(
+            wallet_info.key() == player_account.wallet,
+            FlowError::InvalidPlayer
+        );
 
         require!(
             player_account.index < game.player_count,
             FlowError::InvalidPlayer
         );
+
+        // add both to action accounts
         action_accounts.push(ShortAccountMeta {
-            pubkey: account_info.key().to_bytes().into(),
-            is_writable: true,
+            pubkey: player_pda_info.key().to_bytes().into(),
+            is_writable: false, // read only
+        });
+        action_accounts.push(ShortAccountMeta {
+            pubkey: wallet_info.key().to_bytes().into(),
+            is_writable: true, // receives SOL
         });
     }
 
     game.exit(&crate::ID)?;
 
     // Build settle() Magic Action
-    let instruction_data =
-        anchor_lang::InstructionData::data(&crate::instruction::CommitAndSettle {});
+    let instruction_data = anchor_lang::InstructionData::data(&crate::instruction::Settle {});
     let action_args = ActionArgs::new(instruction_data);
 
     let action = CallHandler {

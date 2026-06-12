@@ -1,6 +1,6 @@
-use crate::{constants::MAX_PRICE_AGE, errors::FlowError};
+use crate::constants::MAX_PRICE_AGE;
 use anchor_lang::prelude::*;
-use pyth_solana_receiver_sdk::price_update::{get_feed_id_from_hex, PriceUpdateV2};
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 pub fn read_price(price_feed: &AccountInfo) -> Result<i64> {
     // deserialize the PriceUpdateV2 from the account data
     let price_update =
