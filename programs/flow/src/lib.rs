@@ -18,13 +18,22 @@ pub mod flow {
 
     pub fn create_game(
         ctx: Context<CreateGame>,
+        game_id: u64,
         direction: Direction,
         entry_fee: u64,
         loss_limit: u8,
         max_players: u8,
         ends_at: i64,
     ) -> Result<()> {
-        create_game::handler(ctx, direction, entry_fee, loss_limit, max_players, ends_at)
+        create_game::handler(
+            ctx,
+            game_id,
+            direction,
+            entry_fee,
+            loss_limit,
+            max_players,
+            ends_at,
+        )
     }
 
     pub fn join_game(ctx: Context<JoinGame>) -> Result<()> {
@@ -39,8 +48,12 @@ pub mod flow {
         delegate::delegate(ctx, account_type)
     }
 
-    pub fn schedule_tick(ctx: Context<ScheduleTick>, args: ScheduleTickArgs) -> Result<()> {
-        tick_price::schedule_tick_handler(ctx, args)
+    pub fn schedule_tick(
+        ctx: Context<ScheduleTick>,
+        game_id: u64,
+        args: ScheduleTickArgs,
+    ) -> Result<()> {
+        tick_price::schedule_tick_handler(ctx, game_id, args)
     }
 
     pub fn tick_price(ctx: Context<TickPrice>) -> Result<()> {

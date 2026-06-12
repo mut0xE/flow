@@ -16,7 +16,7 @@ pub struct CommitAndSettle<'info> {
     // GameState
     #[account(
         mut,
-        seeds = [GAME_SEED, game.creator.as_ref()],
+        seeds = [GAME_SEED, game.game_id.to_le_bytes().as_ref(), game.creator.as_ref()],
         bump  = game.bump,
     )]
     pub game: Account<'info, GameState>,

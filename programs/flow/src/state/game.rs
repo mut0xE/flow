@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 
 #[account]
 pub struct GameState {
+    pub game_id: u64,
     //config
     pub creator: Pubkey,
     pub direction: Direction,
@@ -32,6 +33,7 @@ pub struct GameState {
 }
 impl GameState {
     pub const SPACE: usize = 8 // discriminator
+        + 8             // game id
         + 32            // creator
         + 1             // direction
         + 8             // entry_fee

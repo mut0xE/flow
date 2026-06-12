@@ -11,7 +11,7 @@ pub struct StartGame<'info> {
 
     #[account(
         mut,
-        seeds = [GAME_SEED, creator.key().as_ref()],
+        seeds = [GAME_SEED, game.game_id.to_le_bytes().as_ref(),creator.key().as_ref()],
         bump  = game.bump,
     )]
     pub game: Account<'info, GameState>,

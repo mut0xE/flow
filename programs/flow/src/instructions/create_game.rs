@@ -6,6 +6,7 @@ use anchor_lang::system_program;
 use anchor_lang::system_program::Transfer;
 
 #[derive(Accounts)]
+#[instruction(game_id:u64)]
 pub struct CreateGame<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
@@ -14,7 +15,7 @@ pub struct CreateGame<'info> {
         init,
         payer  = creator,
         space  = GameState::DISCRIMINATOR.len() + GameState::SPACE,
-        seeds  = [GAME_SEED, creator.key().as_ref()],
+        seeds  = [GAME_SEED, game_id.to_le_bytes().as_ref(), creator.key().as_ref()],
         bump,
     )]
     pub game: Account<'info, GameState>,
@@ -42,6 +43,7 @@ pub struct CreateGame<'info> {
 
 pub fn handler(
     ctx: Context<CreateGame>,
+    game_id: u64,
     direction: Direction,
     entry_fee: u64,
     loss_limit: u8,
@@ -56,6 +58,7 @@ pub fn handler(
     require!(ends_at > now.unix_timestamp, FlowError::InvalidEntryFee);
 
     ctx.accounts.game.set_inner(GameState {
+        game_id,
         creator: ctx.accounts.creator.key(),
         direction,
         entry_fee,

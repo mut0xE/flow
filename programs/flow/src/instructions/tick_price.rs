@@ -20,6 +20,7 @@ pub struct ScheduleTickArgs {
 }
 
 #[derive(Accounts)]
+#[instruction(game_id:u64)]
 pub struct ScheduleTick<'info> {
     /// CHECK: used for CPI
     #[account()]
@@ -29,7 +30,7 @@ pub struct ScheduleTick<'info> {
     pub payer: Signer<'info>,
 
     /// CHECK: Passed to CPI - using UncheckedAccount to avoid Anchor re-serializing stale data after CPI
-    #[account(mut, seeds = [GAME_SEED,payer.key().as_ref()], bump)]
+    #[account(mut, seeds = [GAME_SEED, game_id.to_le_bytes().as_ref(), payer.key().as_ref()], bump)]
     pub game: UncheckedAccount<'info>,
 
     /// CHECK: current holder's PlayerAccount passed to tick_price
@@ -46,7 +47,7 @@ pub struct ScheduleTick<'info> {
 pub struct TickPrice<'info> {
     #[account(
         mut,
-        seeds = [GAME_SEED, game_state.creator.as_ref()],
+        seeds = [GAME_SEED, game_state.game_id.to_le_bytes().as_ref() ,game_state.creator.as_ref()],
         bump  = game_state.bump,
     )]
     pub game_state: Account<'info, GameState>,
@@ -67,7 +68,11 @@ pub struct TickPrice<'info> {
     pub price_feed: AccountInfo<'info>,
 }
 
-pub fn schedule_tick_handler(ctx: Context<ScheduleTick>, args: ScheduleTickArgs) -> Result<()> {
+pub fn schedule_tick_handler(
+    ctx: Context<ScheduleTick>,
+    _game_id: u64,
+    args: ScheduleTickArgs,
+) -> Result<()> {
     // build the tick_price instruction to schedule
     let tick_ix = Instruction {
         program_id: crate::ID,
