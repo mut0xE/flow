@@ -3,7 +3,7 @@ import BN from "bn.js";
 
 export function logTx(label: string, tx: TransactionSignature) {
   console.log(`\n✅ [${label}]`);
-  console.log(`   tx: https://explorer.solana.com/tx/${tx}?cluster=devnet`);
+  console.log(`   tx: https://orbmarkets.io/tx/${tx}?cluster=devnet`);
 }
 
 export function logAccount(label: string, pubkey: PublicKey) {

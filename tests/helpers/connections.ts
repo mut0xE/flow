@@ -11,14 +11,10 @@ import {
 } from "@solana/web3.js";
 import { randomBytes } from "crypto";
 
-export const L1_ENDPOINT =
-  process.env.ANCHOR_PROVIDER_URL || "https://api.devnet.solana.com";
 export const ER_RPC = "https://devnet-as.magicblock.app/";
 export const ER_WS = "wss://devnet-router.magicblock.app";
 export const ROUTER_ENDPOINT = "https://devnet-router.magicblock.app";
 export const ROUTER_WS_ENDPOINT = "wss://devnet-router.magicblock.app";
-
-export const ER_VALIDATOR = getErValidator(ER_RPC);
 
 export const SOL_USD_FEED = new anchor.web3.PublicKey(
   "ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu"
@@ -34,7 +30,6 @@ export function getMagicRouter(): ConnectionMagicRouter {
 export function getErProvider(wallet: anchor.Wallet): anchor.AnchorProvider {
   return new anchor.AnchorProvider(
     new anchor.web3.Connection(ER_RPC, {
-      wsEndpoint: ER_WS,
       commitment: "confirmed",
     }),
     wallet,

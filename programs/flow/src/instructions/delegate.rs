@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::{anchor::delegate, cpi::DelegateConfig};
 
-use crate::constants::GAME_SEED;
+use crate::constants::{GAME_SEED, PLAYER_SEED};
 
 #[delegate]
 #[derive(Accounts)]
@@ -35,6 +35,7 @@ pub fn delegate(ctx: Context<DelegateInput>, account_type: AccountType) -> Resul
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub enum AccountType {
     GameState { game_id: u64, creator: Pubkey },
+    PlayerAccount { player: Pubkey, game: Pubkey },
 }
 
 pub fn derive_seeds_from_account_type(account_type: &AccountType) -> Vec<Vec<u8>> {
@@ -44,6 +45,13 @@ pub fn derive_seeds_from_account_type(account_type: &AccountType) -> Vec<Vec<u8>
                 GAME_SEED.to_vec(),
                 game_id.to_le_bytes().to_vec(),
                 creator.as_ref().to_vec(),
+            ]
+        }
+        AccountType::PlayerAccount { game, player } => {
+            vec![
+                PLAYER_SEED.to_vec(),
+                game.as_ref().to_vec(),
+                player.as_ref().to_vec(),
             ]
         }
     }

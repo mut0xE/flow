@@ -7,6 +7,7 @@ import {
   getVaultPDA,
   getPlayerPDA,
   loadPlayer,
+  delegateToEr,
 } from "./helpers/accounts";
 import {
   logTx,
@@ -17,15 +18,16 @@ import {
 } from "./helpers/log";
 import {
   getErProvider,
-  ER_VALIDATOR,
   SOL_USD_FEED,
   airdropFromWallet,
-  L1_ENDPOINT,
+  getErValidator,
+  ER_RPC,
 } from "./helpers/connections";
 import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
+  PublicKey,
   SystemProgram,
 } from "@solana/web3.js";
 import { assert } from "chai";
@@ -33,7 +35,19 @@ import { assert } from "chai";
 describe("flow", () => {
   dotenv.config();
 
-  const provider = anchor.AnchorProvider.env();
+  const connection = new Connection(
+    // process.env.ANCHOR_PROVIDER_URL!,
+    process.env.HELIUS_RPC,
+    "confirmed"
+  );
+  const provider = new anchor.AnchorProvider(
+    connection,
+    anchor.AnchorProvider.env().wallet,
+    {
+      commitment: "confirmed",
+      preflightCommitment: "confirmed",
+    }
+  );
   anchor.setProvider(provider);
 
   const program = anchor.workspace.flow as Program<Flow>;
@@ -44,6 +58,7 @@ describe("flow", () => {
   const player2 = loadPlayer(process.env.PLAYER2);
 
   const GAME_ID = randomGameId();
+  let ER_VALIDATOR: PublicKey;
 
   const gamePDA = getGamePDA(GAME_ID, creator.publicKey, program.programId);
   const vaultPDA = getVaultPDA(gamePDA, program.programId);
@@ -80,7 +95,8 @@ describe("flow", () => {
     logAccount("vaultPDA", vaultPDA);
     logAccount("creatorPlayer", creatorPlayerPDA);
     logAccount("player2Player", player2PlayerPDA);
-    logAccount("player2Player", player2PlayerPDA);
+
+    ER_VALIDATOR = await getErValidator(ER_RPC);
 
     const bal = await provider.connection.getBalance(creator.publicKey);
     logField("creator balance", `${(bal / LAMPORTS_PER_SOL).toFixed(2)} SOL`);
@@ -107,7 +123,7 @@ describe("flow", () => {
         systemProgram: SystemProgram.programId,
       })
       .signers([creator])
-      .rpc({ skipPreflight: true });
+      .rpc();
 
     logTx("create_game", tx);
 
@@ -150,5 +166,104 @@ describe("flow", () => {
     logField("vault balance", `${vaultBal} lamports`);
 
     assert.equal(vaultBal, ENTRY_FEE.toNumber());
+  });
+
+  it("player2 joins game", async () => {
+    logSection("TEST 2: join_game");
+    const tx = await program.methods
+      .joinGame()
+      .accounts({
+        player: player2.publicKey,
+        //@ts-ignore
+        game: gamePDA,
+        vault: vaultPDA,
+        playerAccount: player2PlayerPDA,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([player2])
+      .rpc({ skipPreflight: true });
+
+    logTx("join_game", tx);
+
+    // ── Verify GameState updated ───────────────────
+    const game = await program.account.gameState.fetch(gamePDA);
+    logField("player_count", game.playerCount);
+    logField("total_deposited", game.totalDeposited.toString());
+    logField("status", game.status);
+
+    assert.equal(game.playerCount, 2);
+    assert.equal(
+      game.totalDeposited.toString(),
+      ENTRY_FEE.muln(2).toString() // 2 × entry_fee
+    );
+    assert.deepEqual(game.status, { waiting: {} }); // still waiting
+
+    // ── Verify player2 PlayerAccount ───────────────
+    const player2Account = await program.account.playerAccount.fetch(
+      player2PlayerPDA
+    );
+
+    logField("player2.index", player2Account.index);
+    logField("player2.wallet", player2Account.wallet.toString());
+    logField("player2.game", player2Account.game.toString());
+
+    assert.equal(player2Account.index, 1);
+    assert.equal(
+      player2Account.wallet.toString(),
+      player2.publicKey.toString()
+    );
+    assert.equal(player2Account.game.toString(), gamePDA.toString());
+
+    // ── Verify vault received both entry fees ──────
+    const vaultBal = await provider.connection.getBalance(vaultPDA);
+    logField("vault balance", `${vaultBal} lamports`);
+
+    assert.equal(vaultBal, ENTRY_FEE.muln(2).toNumber());
+  });
+
+  it("delegates creator PlayerAccount to ER", async () => {
+    logSection("TEST 3: delegate creatorPlayerAccount");
+
+    const txHash = await delegateToEr(
+      program,
+      provider.connection,
+      creator,
+      creatorPlayerPDA,
+      { playerAccount: { game: gamePDA, player: creator.publicKey } },
+      ER_VALIDATOR
+    );
+
+    logTx("delegate_creatorPlayer", txHash);
+  });
+
+  it("delegates player2 PlayerAccount to ER", async () => {
+    logSection("TEST 4: delegate player2PlayerAccount");
+
+    const txHash = await delegateToEr(
+      program,
+      provider.connection,
+      player2,
+      player2PlayerPDA,
+      { playerAccount: { game: gamePDA, player: player2.publicKey } },
+      ER_VALIDATOR
+    );
+
+    logTx("delegate_player2Player", txHash);
+  });
+
+  it("delegates GameAccount to ER", async () => {
+    logSection("TEST 5: delegate GameAccount");
+
+    const txHash = await delegateToEr(
+      program,
+      provider.connection,
+      creator,
+      gamePDA,
+      { gameState: { gameId: GAME_ID, creator: creator.publicKey } },
+      ER_VALIDATOR
+    );
+
+    logTx("delegate_game", txHash);
+    console.log("\n✅ GameAccount delegated to ER");
   });
 });
