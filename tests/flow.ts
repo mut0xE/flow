@@ -28,9 +28,12 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
+  sendAndConfirmTransaction,
   SystemProgram,
+  Transaction,
 } from "@solana/web3.js";
 import { assert } from "chai";
+import { MAGIC_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 
 describe("flow", () => {
   dotenv.config();
@@ -53,6 +56,8 @@ describe("flow", () => {
   const program = anchor.workspace.flow as Program<Flow>;
 
   const erProvider = getErProvider(provider.wallet as anchor.Wallet);
+
+  const erProgram = new Program<Flow>(program.idl, erProvider);
 
   const creator = provider.wallet.payer;
   const player2 = loadPlayer(process.env.PLAYER2);
@@ -264,6 +269,60 @@ describe("flow", () => {
     );
 
     logTx("delegate_game", txHash);
-    console.log("\n✅ GameAccount delegated to ER");
+  });
+
+  it("starts the game", async () => {
+    const sig = await erProgram.methods
+      .startGame()
+      .accounts({
+        creator: creator.publicKey,
+        //@ts-ignore
+        game: gamePDA,
+        creatorPlayer: creatorPlayerPDA,
+        priceFeed: SOL_USD_FEED,
+      })
+      .rpc();
+
+    logTx("start_game:", sig);
+
+    const game = await erProgram.account.gameState.fetch(gamePDA);
+
+    logField("status", game.status);
+    logField("player_count", game.playerCount);
+    logField("entry_fee", game.entryFee.toString());
+    logField("total_deposited", game.totalDeposited.toString());
+    logField("direction", game.direction);
+    logField("loss_limit", game.lossLimit);
+    logField("max_players", game.maxPlayers);
+    logField("current_holder", game.currentHolder.toString());
+    logField("startTime", game.startedAt.toString());
+    logField("endTime", game.endsAt.toString());
+    logField("priceNow", game.solPriceNow.toString());
+    logField("startPrice", game.startPrice.toString());
+
+    assert.deepEqual(game.status, { active: {} });
+    assert.ok(game.startPrice.gt(new BN(0)));
+  });
+
+  it("schedules the crank", async () => {
+    const tx = await erProgram.methods
+      .scheduleTick(GAME_ID, {
+        taskId: new BN(1),
+        executionIntervalMillis: new BN(100),
+        iterations: new BN(3000),
+      })
+      .accounts({
+        magicProgram: MAGIC_PROGRAM_ID,
+        payer: creator.publicKey,
+        //@ts-ignore
+        game: gamePDA,
+        holderPlayer: creatorPlayerPDA,
+        priceFeed: SOL_USD_FEED,
+        program: program.programId,
+      })
+      .signers([creator])
+      .rpc();
+
+    logTx("schedule_tick tx:", tx);
   });
 });

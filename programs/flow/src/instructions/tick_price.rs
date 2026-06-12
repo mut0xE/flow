@@ -1,4 +1,5 @@
 use crate::constants::*;
+use crate::errors::FlowError;
 use crate::state::*;
 use crate::utils::read_price;
 use anchor_lang::prelude::*;
@@ -11,7 +12,6 @@ use magicblock_magic_program_api::{args::ScheduleTaskArgs, instruction::MagicBlo
 // schedule_tick
 // called ONCE on ER after delegate_game
 // schedules tick_price to run every 100ms automatically
-
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct ScheduleTickArgs {
     pub task_id: i64,
@@ -73,6 +73,11 @@ pub fn schedule_tick_handler(
     _game_id: u64,
     args: ScheduleTickArgs,
 ) -> Result<()> {
+    require_keys_eq!(
+        SOL,
+        ctx.accounts.price_feed.key(),
+        FlowError::InvalidPriceFeed
+    );
     // build the tick_price instruction to schedule
     let tick_ix = Instruction {
         program_id: crate::ID,
@@ -84,7 +89,6 @@ pub fn schedule_tick_handler(
         data: anchor_lang::InstructionData::data(&crate::instruction::TickPrice {}),
     };
     // serialize into MagicBlock ScheduleTask format
-
     let ix_data = bincode::serialize(&MagicBlockInstruction::ScheduleTask(ScheduleTaskArgs {
         task_id: args.task_id,
         execution_interval_millis: args.execution_interval_millis,

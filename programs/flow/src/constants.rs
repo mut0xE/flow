@@ -9,3 +9,4 @@ pub const MIN_PLAYERS: u8 = 2;
 pub const MAX_PRICE_AGE: u64 = 60;
 
 pub const TREASURY: Pubkey = pubkey!("mtqK4nCocC1A7K13oMxqcRY8DPbqAbVwmg7iCY5NvQU");
+pub const SOL: Pubkey = pubkey!("ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu");
