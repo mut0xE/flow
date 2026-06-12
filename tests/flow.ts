@@ -34,6 +34,12 @@ import {
 } from "@solana/web3.js";
 import { assert } from "chai";
 import { MAGIC_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
+import { SessionTokenManager } from "@magicblock-labs/gum-sdk";
+import {
+  getCreatorSessionKeypair,
+  getPlayer2SessionKeypair,
+  SESSION_TOKEN_SEED,
+} from "./helpers/session";
 
 describe("flow", () => {
   dotenv.config();
@@ -77,6 +83,18 @@ describe("flow", () => {
     player2.publicKey,
     program.programId
   );
+
+  const sessionManager = new SessionTokenManager(
+    provider.wallet,
+    provider.connection
+  );
+  const sessionProgramId = sessionManager.program.programId;
+
+  const creatorSessionKeypair = getCreatorSessionKeypair();
+  const player2SessionKeypair = getPlayer2SessionKeypair();
+
+  let creatorSessionPDA: PublicKey;
+  let player2SessionPDA: PublicKey;
 
   const ENTRY_FEE = new BN(0.1 * LAMPORTS_PER_SOL);
   const LOSS_LIMIT = 5;
@@ -324,5 +342,97 @@ describe("flow", () => {
       .rpc();
 
     logTx("schedule_tick tx:", tx);
+  });
+
+  it("creates session for creator", async () => {
+    logSection("TEST 8: create session (creator)");
+
+    const sessionManager = new SessionTokenManager(
+      provider.wallet,
+      provider.connection
+    );
+
+    creatorSessionPDA = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from(SESSION_TOKEN_SEED),
+        program.programId.toBytes(),
+        creatorSessionKeypair.publicKey.toBytes(),
+        creator.publicKey.toBytes(),
+      ],
+      sessionProgramId
+    )[0];
+
+    const tx = await sessionManager.program.methods
+      .createSessionV2(
+        true,
+        new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
+        new anchor.BN(0.005 * LAMPORTS_PER_SOL)
+      )
+      .accounts({
+        targetProgram: program.programId,
+        sessionSigner: creatorSessionKeypair.publicKey,
+        feePayer: creator.publicKey,
+        authority: creator.publicKey,
+      })
+      .transaction();
+
+    tx.feePayer = creator.publicKey;
+
+    const txHash = await sendAndConfirmTransaction(
+      provider.connection,
+      tx,
+      [creator, creatorSessionKeypair],
+      { commitment: "confirmed" }
+    );
+    logTx("createSession_creator", txHash);
+    logTx("createSession_creator", txHash);
+    logAccount("sessionSigner", creatorSessionKeypair.publicKey);
+    logAccount("sessionTokenPDA", creatorSessionPDA);
+  });
+
+  it("creates session for player2", async () => {
+    logSection("TEST 9: create session (player2)");
+
+    const sessionManager = new SessionTokenManager(
+      new anchor.Wallet(player2),
+      provider.connection
+    );
+
+    player2SessionPDA = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from(SESSION_TOKEN_SEED),
+        program.programId.toBytes(),
+        player2SessionKeypair.publicKey.toBytes(),
+        player2.publicKey.toBytes(),
+      ],
+      sessionManager.program.programId
+    )[0];
+
+    const tx = await sessionManager.program.methods
+      .createSessionV2(
+        true,
+        new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
+        new anchor.BN(0.005 * LAMPORTS_PER_SOL)
+      )
+      .accounts({
+        targetProgram: program.programId,
+        sessionSigner: player2SessionKeypair.publicKey,
+        feePayer: player2.publicKey,
+        authority: player2.publicKey,
+      })
+      .transaction();
+
+    tx.feePayer = player2.publicKey;
+
+    const txHash = await sendAndConfirmTransaction(
+      provider.connection,
+      tx,
+      [player2, player2SessionKeypair],
+      { commitment: "confirmed" }
+    );
+
+    logTx("createSession_player2", txHash);
+    logAccount("sessionSigner", player2SessionKeypair.publicKey);
+    logAccount("sessionTokenPDA", player2SessionPDA);
   });
 });
