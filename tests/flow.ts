@@ -435,4 +435,40 @@ describe("flow", () => {
     logAccount("sessionSigner", player2SessionKeypair.publicKey);
     logAccount("sessionTokenPDA", player2SessionPDA);
   });
+
+  it("creator passes position to player2 using session key", async () => {
+    logSection("TEST 10: pass (session key)");
+
+    // wait 1 second for price to move
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const tx = await erProgram.methods
+      .pass()
+      .accounts({
+        signer: creatorSessionKeypair.publicKey,
+        //@ts-ignore
+        game: gamePDA,
+        holderPlayer: creatorPlayerPDA,
+        nextPlayer: player2PlayerPDA,
+        sessionToken: creatorSessionPDA,
+        priceFeed: SOL_USD_FEED,
+      })
+      .signers([creatorSessionKeypair])
+      .rpc({ skipPreflight: true });
+
+    logTx("pass", tx);
+
+    // verify on ER
+    const game = await erProgram.account.gameState.fetch(gamePDA);
+
+    console.log({ game });
+    logField("current_holder", game.currentHolder.toString());
+    logField("creator score", game.scores[0].toString());
+    logField("price_now", game.solPriceNow.toString());
+    logField("start price", game.startPrice.toString());
+
+    assert.equal(game.currentHolder.toString(), player2.publicKey.toString());
+    // creator score should be non-zero (positive or negative bp)
+    assert.ok(game.scores[0] !== undefined);
+  });
 });
