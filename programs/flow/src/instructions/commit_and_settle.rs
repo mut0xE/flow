@@ -4,16 +4,22 @@ use crate::instructions::calculate_score;
 use crate::state::*;
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::commit;
-use ephemeral_rollups_sdk::ephem::{CallHandler, MagicIntentBundleBuilder};
-use ephemeral_rollups_sdk::{ActionArgs, ShortAccountMeta};
+use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
+
+impl TryFrom<&AccountInfo<'_>> for PlayerAccount {
+    type Error = Error;
+
+    fn try_from(acc: &AccountInfo<'_>) -> Result<Self> {
+        PlayerAccount::try_deserialize(&mut &acc.try_borrow_data()?[..])
+            .map_err(|_| error!(FlowError::InvalidPlayer))
+    }
+}
 
 #[commit]
 #[derive(Accounts)]
 pub struct CommitAndSettle<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
+    pub signer: Signer<'info>,
 
-    // GameState
     #[account(
         mut,
         seeds = [GAME_SEED, game.game_id.to_le_bytes().as_ref(), game.creator.as_ref()],
@@ -21,26 +27,7 @@ pub struct CommitAndSettle<'info> {
     )]
     pub game: Account<'info, GameState>,
 
-    // current holder's PlayerAccount
-    #[account(
-        seeds = [
-            PLAYER_SEED,
-            game.key().as_ref(),
-            game.current_holder.as_ref()
-        ],
-        bump = holder_player.bump,
-    )]
-    pub holder_player: Account<'info, PlayerAccount>,
-
-    /// CHECK: vault system PDA holding all entry fees
-    #[account(
-        mut,
-        seeds = [VAULT_SEED, game.key().as_ref()],
-        bump  = game.vault_bump,
-    )]
-    pub vault: SystemAccount<'info>,
-
-    /// CHECK: Pyth Lazer SOL price feed
+    /// CHECK: Pyth price feed
     pub price_feed: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
@@ -49,15 +36,60 @@ pub struct CommitAndSettle<'info> {
 pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>) -> Result<()> {
     let game = &mut ctx.accounts.game;
 
-    // Only callable when game is Ended
     require!(game.status == GameStatus::Ended, FlowError::GameNotEnded);
 
+    let player_count = game.player_count as usize;
     require!(
-        ctx.remaining_accounts.len() == game.player_count as usize * 2,
+        ctx.remaining_accounts.len() == player_count,
         FlowError::InvalidPlayerCount
     );
 
-    let holder_player = &ctx.accounts.holder_player;
+    let mut seen = vec![false; player_count];
+    let mut players: Vec<(PlayerAccount, &AccountInfo)> = Vec::with_capacity(player_count);
+
+    for acc in ctx.remaining_accounts.iter() {
+        let player = PlayerAccount::try_from(acc)?;
+
+        let (expected_pda, _) = Pubkey::find_program_address(
+            &[PLAYER_SEED, game.key().as_ref(), player.wallet.as_ref()],
+            &crate::ID,
+        );
+        require_keys_eq!(expected_pda, acc.key(), FlowError::InvalidPlayer);
+        require!(
+            (player.index as usize) < player_count,
+            FlowError::InvalidPlayer
+        );
+
+        let idx = player.index as usize;
+        require!(!seen[idx], FlowError::DuplicatePlayer);
+        seen[idx] = true;
+        msg!(
+            "playerPDA[{}] pda={} wallet={} price_at_receive={}",
+            idx,
+            acc.key(),
+            player.wallet,
+            player.price_at_receive
+        );
+        players.push((player, acc));
+    }
+    require!(seen.iter().all(|&v| v), FlowError::MissingPlayer);
+
+    let holder_key = game.current_holder;
+    let (holder_player, _) = players
+        .iter()
+        .find(|(p, _)| p.wallet == holder_key)
+        .ok_or(error!(FlowError::InvalidPlayer))?;
+
+    let holder_idx = holder_player.index as usize;
+    require!(holder_idx < player_count, FlowError::InvalidPlayer);
+
+    msg!(
+        "FLOW DEBUG: holder={} price_at_receive={} final_price={} direction={:?}",
+        holder_key,
+        holder_player.price_at_receive,
+        game.final_price,
+        game.direction
+    );
 
     let final_score = calculate_score(
         holder_player.price_at_receive,
@@ -65,95 +97,41 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>
         &game.direction,
     );
 
-    game.scores[holder_player.index as usize] = game.scores[holder_player.index as usize]
+    msg!(
+        "FLOW DEBUG: prev_score={} final_score={} new_score={}",
+        game.scores[holder_idx],
+        final_score,
+        game.scores[holder_idx]
+            .checked_add(final_score)
+            .unwrap_or(0)
+    );
+
+    game.scores[holder_idx] = game.scores[holder_idx]
         .checked_add(final_score)
         .ok_or(FlowError::OverFlow)?;
 
-    let mut action_accounts = vec![
-        ShortAccountMeta {
-            pubkey: game.key().to_bytes().into(),
-            is_writable: true,
-        },
-        ShortAccountMeta {
-            pubkey: ctx.accounts.vault.key().to_bytes().into(),
-            is_writable: true,
-        },
-        ShortAccountMeta {
-            pubkey: ctx.accounts.system_program.key().to_bytes().into(),
-            is_writable: false,
-        },
-    ];
+    msg!(
+        "FLOW: final holder={} idx={} score={}",
+        holder_key,
+        holder_idx,
+        game.scores[holder_idx]
+    );
 
-    for i in (0..ctx.remaining_accounts.len()).step_by(2) {
-        let player_pda_info = &ctx.remaining_accounts[i];
-        let wallet_info = &ctx.remaining_accounts[i + 1];
-
-        // deserialize PlayerAccount
-        let player_account = Account::<PlayerAccount>::try_from(player_pda_info)?;
-
-        // validate PDA
-        let (expected_pda, _) = Pubkey::find_program_address(
-            &[
-                PLAYER_SEED,
-                game.key().as_ref(),
-                player_account.wallet.as_ref(),
-            ],
-            &crate::ID,
-        );
-
-        require!(
-            expected_pda == player_pda_info.key(),
-            FlowError::InvalidPlayer
-        );
-
-        // validate wallet matches what's in PlayerAccount
-        require!(
-            wallet_info.key() == player_account.wallet,
-            FlowError::InvalidPlayer
-        );
-
-        require!(
-            player_account.index < game.player_count,
-            FlowError::InvalidPlayer
-        );
-
-        // add both to action accounts
-        action_accounts.push(ShortAccountMeta {
-            pubkey: player_pda_info.key().to_bytes().into(),
-            is_writable: false, // read only
-        });
-        action_accounts.push(ShortAccountMeta {
-            pubkey: wallet_info.key().to_bytes().into(),
-            is_writable: true, // receives SOL
-        });
+    let mut accounts_to_commit = vec![ctx.accounts.game.to_account_info()];
+    for acc in ctx.remaining_accounts.iter() {
+        accounts_to_commit.push(acc.clone());
     }
 
-    game.exit(&crate::ID)?;
+    ctx.accounts.game.exit(&crate::ID)?;
 
-    // Build settle() Magic Action
-    let instruction_data = anchor_lang::InstructionData::data(&crate::instruction::Settle {});
-    let action_args = ActionArgs::new(instruction_data);
-
-    let action = CallHandler {
-        destination_program: crate::ID,
-        accounts: action_accounts,
-        args: action_args,
-        // payer covers the L1 transaction fee for settle()
-        escrow_authority: ctx.accounts.payer.to_account_info(),
-        compute_units: 400_000,
-    };
-
-    // Commit + Undelegate + Magic Action
     MagicIntentBundleBuilder::new(
-        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.signer.to_account_info(),
         ctx.accounts.magic_context.to_account_info(),
         ctx.accounts.magic_program.to_account_info(),
     )
-    .commit_and_undelegate(&[ctx.accounts.game.to_account_info()])
-    .add_post_commit_actions([action])
+    .commit_and_undelegate(&accounts_to_commit)
     .build_and_invoke()?;
 
-    msg!("FLOW: Committed and undelegated. Settle action fired.");
-
+    msg!("FLOW: Game + PlayerPDAs committed to L1. Call settle() on L1 to distribute vault.");
     Ok(())
 }

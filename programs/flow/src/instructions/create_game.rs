@@ -20,7 +20,7 @@ pub struct CreateGame<'info> {
     )]
     pub game: Account<'info, GameState>,
 
-    ///CHECK: vault is a system PDA that holds SOL
+    /// CHECK: vault holds SOL
     #[account(
         mut,
         seeds  = [VAULT_SEED, game.key().as_ref()],
@@ -28,7 +28,6 @@ pub struct CreateGame<'info> {
     )]
     pub vault: SystemAccount<'info>,
 
-    /// creator's PlayerAccount
     #[account(
         init,
         payer  = creator,
@@ -65,6 +64,7 @@ pub fn handler(
         loss_limit,
         max_players,
         player_count: 1,
+        players: vec![ctx.accounts.creator.key()],
         scores: vec![0i64; max_players as usize],
         total_deposited: entry_fee,
         status: GameStatus::Waiting,
@@ -79,7 +79,6 @@ pub fn handler(
         final_price: 0,
     });
 
-    // transfer entry fee to vault PDA
     system_program::transfer(
         CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -91,7 +90,6 @@ pub fn handler(
         entry_fee,
     )?;
 
-    // create creator PlayerAccount
     ctx.accounts.player.set_inner(PlayerAccount {
         game: ctx.accounts.game.key(),
         wallet: ctx.accounts.creator.key(),
