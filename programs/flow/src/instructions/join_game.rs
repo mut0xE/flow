@@ -17,7 +17,6 @@ pub struct JoinGame<'info> {
        )]
     pub game: Account<'info, GameState>,
 
-    /// vault system PDA — just holds SOL
     #[account(
           mut,
           seeds = [VAULT_SEED, game.key().as_ref()],
@@ -49,7 +48,6 @@ pub fn handler(ctx: Context<JoinGame>) -> Result<()> {
 
     let player_index = game.player_count;
 
-    // Transfer entry fee to vault
     system_program::transfer(
         CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -61,6 +59,7 @@ pub fn handler(ctx: Context<JoinGame>) -> Result<()> {
         game.entry_fee,
     )?;
 
+    game.players.push(ctx.accounts.player.key());
     game.player_count = game
         .player_count
         .checked_add(1)
