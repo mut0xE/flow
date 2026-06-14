@@ -286,16 +286,7 @@ describe("flow", () => {
       })
       .instruction();
 
-    // Escrow top-up must be in same tx as delegation
-    const escrowPDA = escrowPdaFromEscrowAuthority(creator.publicKey);
-    const topUpEscrowIx = createTopUpEscrowInstruction(
-      escrowPDA,
-      creator.publicKey,
-      creator.publicKey,
-      100_000
-    );
-
-    const tx = new Transaction().add(delegateIx, topUpEscrowIx);
+    const tx = new Transaction().add(delegateIx);
     const txHash = await sendAndConfirmTransaction(
       provider.connection,
       tx,
