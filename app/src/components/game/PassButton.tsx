@@ -1,87 +1,146 @@
-"use client"
-import { useState, useCallback } from "react"
-import { useWallet } from "@solana/wallet-adapter-react"
-import { AnchorProvider } from "@coral-xyz/anchor"
-import { PublicKey, Keypair } from "@solana/web3.js"
-import { GameState } from "@/types/game"
-import { getErConnection } from "@/lib/connections"
-import { getProgram } from "@/lib/anchor"
-import { getPlayerPDA } from "@/lib/pdas"
-import { ORACLE_SOL_USD } from "@/lib/oracle"
+"use client";
+import { useState, useCallback } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { AnchorProvider } from "@coral-xyz/anchor";
+import { PublicKey, Keypair } from "@solana/web3.js";
+import { GameState } from "@/types/game";
+import { getErConnection } from "@/lib/connections";
+import { getProgram } from "@/lib/anchor";
+import { getPlayerPDA } from "@/lib/pdas";
+import { ORACLE_SOL_USD } from "@/lib/oracle";
 
 interface Props {
-  game: GameState
-  gamePDA: PublicKey
-  tempKeypair: Keypair | null
-  sessionTokenPDA: PublicKey | null
-  onPass?: () => void
+  game: GameState;
+  gamePDA: PublicKey;
+  tempKeypair: Keypair | null;
+  sessionTokenPDA: PublicKey | null;
+  onPass?: () => void;
 }
 
-export function PassButton({ game, gamePDA, tempKeypair, sessionTokenPDA, onPass }: Props) {
-  const { publicKey, signTransaction } = useWallet()
-  const [selected, setSelected] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+export function PassButton({
+  game,
+  gamePDA,
+  tempKeypair,
+  sessionTokenPDA,
+  onPass,
+}: Props) {
+  const { publicKey, signTransaction } = useWallet();
+  const otherPlayers = game.players.filter(
+    (p) => p.toBase58() !== game.currentHolder.toBase58()
+  );
+  const [selected, setSelected] = useState<string | null>(
+    otherPlayers.length === 1 ? otherPlayers[0].toBase58() : null
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  console.log("PASS ACCOUNTS", {
+    signer: tempKeypair?.publicKey?.toBase58(),
+    sessionToken: sessionTokenPDA?.toBase58(),
+  });
 
-  const isMyTurn = publicKey && game.currentHolder.toBase58() === publicKey.toBase58()
-  const isActive = "active" in game.status
+  console.log("PASS DEBUG", {
+    wallet: publicKey?.toBase58(),
+    currentHolder: game.currentHolder.toBase58(),
+    players: game.players.map((p) => p.toBase58()),
+  });
 
-  const otherPlayers = game.players.filter(p => p.toBase58() !== game.currentHolder.toBase58())
+  const isMyTurn =
+    publicKey && game.currentHolder.toBase58() === publicKey.toBase58();
+  const isActive = "active" in game.status;
 
   const handlePass = useCallback(async () => {
-    if (!selected || !publicKey || !tempKeypair) return
-    setLoading(true)
-    setError(null)
+    if (!selected || !publicKey || !tempKeypair) return;
+    setLoading(true);
+    setError(null);
     try {
-      const erConnection = getErConnection()
-      const nextPlayer = new PublicKey(selected)
+      const erConnection = getErConnection();
+      const nextPlayer = new PublicKey(selected);
       const provider = new AnchorProvider(
         erConnection,
-        { publicKey, signTransaction: signTransaction as any, signAllTransactions: undefined as any },
+        {
+          publicKey,
+          signTransaction: signTransaction as any,
+          signAllTransactions: undefined as any,
+        },
         { commitment: "confirmed" }
-      )
-      const program = getProgram(provider)
+      );
+      const program = getProgram(provider);
 
-      const holderPlayerPDA = getPlayerPDA(gamePDA, game.currentHolder)[0]
-      const nextPlayerPDA = getPlayerPDA(gamePDA, nextPlayer)[0]
+      const holderPlayerPDA = getPlayerPDA(gamePDA, game.currentHolder)[0];
+      const nextPlayerPDA = getPlayerPDA(gamePDA, nextPlayer)[0];
 
       const accounts: any = {
         game: gamePDA,
         holderPlayer: holderPlayerPDA,
         nextPlayer: nextPlayerPDA,
         signer: tempKeypair.publicKey,
-        authority: publicKey,
         priceFeed: ORACLE_SOL_USD,
-      }
-      if (sessionTokenPDA) accounts.sessionToken = sessionTokenPDA
+      };
+      if (sessionTokenPDA) accounts.sessionToken = sessionTokenPDA;
 
-      const tx = await (program.methods as any).pass()
+      const tx = await (program.methods as any)
+        .pass()
         .accounts(accounts)
-        .transaction()
+        .transaction();
 
-      const { value: { blockhash, lastValidBlockHeight } } = await erConnection.getLatestBlockhashAndContext()
-      tx.recentBlockhash = blockhash
-      tx.feePayer = tempKeypair.publicKey
-      tx.sign(tempKeypair)
+      const {
+        value: { blockhash, lastValidBlockHeight },
+      } = await erConnection.getLatestBlockhashAndContext();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = tempKeypair.publicKey;
+      tx.sign(tempKeypair);
 
-      const sig = await erConnection.sendRawTransaction(tx.serialize(), { skipPreflight: true })
-      await erConnection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: sig }, "confirmed")
-      setSelected(null)
-      onPass?.()
+      const sig = await erConnection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: true,
+      });
+
+      const txInfo = await erConnection.getTransaction(sig, {
+        maxSupportedTransactionVersion: 0,
+      });
+
+      console.log("PASS TX ERR", txInfo?.meta?.err);
+      console.log("PASS LOGS", txInfo?.meta?.logMessages);
+
+      if (txInfo?.meta?.err) {
+        throw new Error(
+          "Pass failed: " +
+            JSON.stringify(txInfo.meta.err) +
+            "\n" +
+            (txInfo?.meta?.logMessages ?? []).join("\n")
+        );
+      }
+
+      await erConnection.confirmTransaction(
+        { blockhash, lastValidBlockHeight, signature: sig },
+        "confirmed"
+      );
+      setSelected(null);
+      onPass?.();
     } catch (e: any) {
-      setError(e?.message ?? "Pass failed")
+      setError(e?.message ?? "Pass failed");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [selected, publicKey, tempKeypair, sessionTokenPDA, gamePDA, game, signTransaction, onPass])
+  }, [
+    selected,
+    publicKey,
+    tempKeypair,
+    sessionTokenPDA,
+    gamePDA,
+    game,
+    signTransaction,
+    onPass,
+  ]);
 
-  if (!isActive || !isMyTurn) return null
+  if (!isActive || !isMyTurn) return null;
 
   return (
     <div className="space-y-3">
-      <div className="text-xs text-gray-500 uppercase tracking-wider">Pass potato to</div>
+      <div className="text-xs text-gray-500 uppercase tracking-wider">
+        Pass potato to
+      </div>
       <div className="flex flex-wrap gap-2">
-        {otherPlayers.map(p => (
+        {otherPlayers.map((p) => (
           <button
             key={p.toBase58()}
             onClick={() => setSelected(p.toBase58())}
@@ -104,5 +163,5 @@ export function PassButton({ game, gamePDA, tempKeypair, sessionTokenPDA, onPass
         {loading ? "Passing..." : "PASS 🥔"}
       </button>
     </div>
-  )
+  );
 }

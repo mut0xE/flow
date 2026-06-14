@@ -242,40 +242,33 @@ describe("flow", () => {
     assert.equal(vaultBal, ENTRY_FEE.muln(2).toNumber());
   });
 
-  it("delegates creator PlayerAccount to ER", async () => {
-    logSection("TEST 3: delegate creatorPlayerAccount");
+  it("delegates all accounts and starts game", async () => {
+    logSection("TEST 3: delegate all PDAs + start_game");
 
-    const txHash = await delegateToEr(
-      program,
-      provider.connection,
-      creator,
-      creatorPlayerPDA,
-      { playerAccount: { game: gamePDA, player: creator.publicKey } },
-      ER_VALIDATOR
-    );
+    // Build all 3 delegate ixs — creator pays for all, no need for player2 to sign
+    const delegateCreatorPlayerIx = await program.methods
+      .delegateAccount({
+        playerAccount: { game: gamePDA, player: creator.publicKey },
+      })
+      .accounts({
+        payer: creator.publicKey,
+        pda: creatorPlayerPDA,
+        validator: ER_VALIDATOR,
+      })
+      .instruction();
 
-    logTx("delegate_creatorPlayer", txHash);
-  });
+    const delegatePlayer2PlayerIx = await program.methods
+      .delegateAccount({
+        playerAccount: { game: gamePDA, player: player2.publicKey },
+      })
+      .accounts({
+        payer: creator.publicKey,
+        pda: player2PlayerPDA,
+        validator: ER_VALIDATOR,
+      })
+      .instruction();
 
-  it("delegates player2 PlayerAccount to ER", async () => {
-    logSection("TEST 4: delegate player2PlayerAccount");
-
-    const txHash = await delegateToEr(
-      program,
-      provider.connection,
-      player2,
-      player2PlayerPDA,
-      { playerAccount: { game: gamePDA, player: player2.publicKey } },
-      ER_VALIDATOR
-    );
-
-    logTx("delegate_player2Player", txHash);
-  });
-
-  it("delegates GameAccount to ER (with escrow top-up)", async () => {
-    logSection("TEST 5: delegate GameAccount");
-
-    const delegateIx = await program.methods
+    const delegateGameIx = await program.methods
       .delegateAccount({
         gameState: { gameId: GAME_ID, creator: creator.publicKey },
       })
@@ -286,30 +279,45 @@ describe("flow", () => {
       })
       .instruction();
 
-    const tx = new Transaction().add(delegateIx);
-    const txHash = await sendAndConfirmTransaction(
+    // Single L1 tx — creator signs only
+    const delegateTx = new Transaction().add(
+      delegateCreatorPlayerIx,
+      delegatePlayer2PlayerIx,
+      delegateGameIx
+    );
+    const delegateTxHash = await sendAndConfirmTransaction(
       provider.connection,
-      tx,
+      delegateTx,
       [creator],
       { skipPreflight: true, commitment: "confirmed" }
     );
+    logTx("delegate_all", delegateTxHash);
 
-    logTx("delegate_game + escrow_topup", txHash);
-  });
-
-  it("starts the game", async () => {
-    const sig = await erProgram.methods
+    // start_game: creator wallet signs directly, sessionToken omitted (None)
+    // session_auth_or fallback: game.creator == signer.key() → passes
+    const startGameIx = await erProgram.methods
       .startGame()
       .accounts({
-        creator: creator.publicKey,
+        signer: creator.publicKey,
         //@ts-ignore
         game: gamePDA,
         creatorPlayer: creatorPlayerPDA,
         priceFeed: SOL_USD_FEED,
       })
-      .rpc();
+      .instruction();
 
-    logTx("start_game:", sig);
+    const startTx = new Transaction().add(startGameIx);
+    startTx.feePayer = creator.publicKey;
+    startTx.recentBlockhash = (
+      await erProvider.connection.getLatestBlockhash()
+    ).blockhash;
+    startTx.sign(creator);
+    const startSig = await erProvider.connection.sendRawTransaction(
+      startTx.serialize(),
+      { skipPreflight: true }
+    );
+    await waitForCommitment(startSig, erProvider.connection);
+    logTx("start_game", startSig);
 
     const game = await erProgram.account.gameState.fetch(gamePDA);
     logField("status", game.status);
@@ -330,9 +338,8 @@ describe("flow", () => {
       .accounts({
         magicProgram: MAGIC_PROGRAM_ID,
         payer: creator.publicKey,
-        //@ts-ignore
+        creator: creator.publicKey,
         game: gamePDA,
-        holderPlayer: creatorPlayerPDA,
         priceFeed: SOL_USD_FEED,
         program: program.programId,
       })

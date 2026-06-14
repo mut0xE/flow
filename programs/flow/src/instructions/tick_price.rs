@@ -23,11 +23,15 @@ pub struct ScheduleTick<'info> {
     #[account()]
     pub magic_program: UncheckedAccount<'info>,
 
+    /// session key or any signer — not used for seed derivation
     #[account(mut)]
     pub payer: Signer<'info>,
 
+    /// CHECK: game creator wallet — used for game PDA seed derivation only
+    pub creator: UncheckedAccount<'info>,
+
     /// CHECK: UncheckedAccount prevents Anchor re-serializing stale data after CPI
-    #[account(mut, seeds = [GAME_SEED, game_id.to_le_bytes().as_ref(), payer.key().as_ref()], bump)]
+    #[account(mut, seeds = [GAME_SEED, game_id.to_le_bytes().as_ref(), creator.key().as_ref()], bump)]
     pub game: UncheckedAccount<'info>,
 
     /// CHECK: Pyth price feed

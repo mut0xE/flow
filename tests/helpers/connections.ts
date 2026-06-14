@@ -4,6 +4,7 @@ import {
   GetCommitmentSignature,
 } from "@magicblock-labs/ephemeral-rollups-sdk";
 import {
+  Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -101,14 +102,15 @@ export async function getErValidator(baseUrl: string): Promise<PublicKey> {
 // ── Wait for ER commit to land on L1 ─────────────────
 export async function waitForCommitment(
   erTxHash: string,
-  router: ConnectionMagicRouter,
+  router: Connection,
   timeoutMs = 120_000
 ): Promise<string> {
   return Promise.race([
     GetCommitmentSignature(erTxHash, router),
     new Promise<never>((_, reject) =>
       setTimeout(
-        () => reject(new Error(`waitForCommitment timed out after ${timeoutMs}ms`)),
+        () =>
+          reject(new Error(`waitForCommitment timed out after ${timeoutMs}ms`)),
         timeoutMs
       )
     ),
