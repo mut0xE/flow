@@ -1,6 +1,8 @@
 {
   "license": "ISC",
   "scripts": {
+    "test:flow": "ts-mocha -p ./tsconfig.json -t 1000000 \"tests/flow.ts\"",
+    "test:all": "ts-mocha -p ./tsconfig.json -t 1000000 \"tests/flow.ts\" \"tests/failure.ts\"",
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
   },
