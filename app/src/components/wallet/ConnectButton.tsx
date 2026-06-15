@@ -38,8 +38,8 @@ export function ConnectButton() {
       setOpen(false);
       await select(name);
       await connect();
-    } catch (err) {
-      console.error(err);
+    } catch {
+      // connect errors are surfaced via useWallet().error
     }
   };
 

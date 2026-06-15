@@ -13,6 +13,27 @@ import {
   buildCreateSessionIx,
 } from "@/lib/session"
 
+function parseError(e: any): string {
+  if (e?.error?.errorMessage) return e.error.errorMessage
+  const logs: string[] =
+    e?.logs ?? (typeof e?.getLogs === "function" ? e.getLogs() : []) ?? []
+  for (const log of logs) {
+    const anchor = log.match(/AnchorError[^:]*: ([^\n]+)/)
+    if (anchor) return anchor[1].trim()
+    const msg = log.match(/Error Message: (.+)/)
+    if (msg) return msg[1].trim()
+    const transfer = log.match(/Transfer: (.+)/)
+    if (transfer) return transfer[1].trim()
+  }
+  const raw: string = e?.message ?? String(e)
+  const simMatch = raw.match(/Transaction simulation failed: (.+?)(?:\. Logs:|$)/)
+  if (simMatch) return simMatch[1].trim()
+  return raw.length > 200 ? raw.slice(0, 200) + "…" : raw
+}
+
+const EXPLORER = (sig: string) =>
+  `https://explorer.solana.com/tx/${sig}?cluster=devnet`
+
 interface FormValues {
   direction: "long" | "short"
   entryFeeSol: string
@@ -26,6 +47,7 @@ export function CreateGameForm() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [txSig, setTxSig] = useState<string | null>(null)
 
   const { register, handleSubmit, watch, setValue } = useForm<FormValues>({
     defaultValues: {
@@ -43,6 +65,7 @@ export function CreateGameForm() {
     if (!publicKey || !signTransaction || !signAllTransactions) return
     setLoading(true)
     setError(null)
+    setTxSig(null)
     try {
       const provider = new AnchorProvider(
         l1Connection,
@@ -80,31 +103,31 @@ export function CreateGameForm() {
       const tx = new Transaction().add(createGameIx)
 
       // Bundle session creation into same tx if session doesn't exist
+      let sig: string
       if (!existingSession) {
         const sessionValidUntil = new BN(Math.floor(Date.now() / 1000) + 6 * 24 * 3600)
         const sessionIx = await buildCreateSessionIx(publicKey, signTransaction as any, sessionKp, sessionValidUntil)
         tx.add(sessionIx)
-        // Session keypair must co-sign
         const { blockhash, lastValidBlockHeight } = await l1Connection.getLatestBlockhash("confirmed")
         tx.recentBlockhash = blockhash
         tx.feePayer = publicKey
         tx.partialSign(sessionKp)
         const signed = await signTransaction(tx)
-        const sig = await l1Connection.sendRawTransaction(signed.serialize(), { skipPreflight: false })
+        sig = await l1Connection.sendRawTransaction(signed.serialize(), { skipPreflight: false })
         await l1Connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: sig }, "confirmed")
       } else {
-        // No session needed — just send create_game
         const { blockhash, lastValidBlockHeight } = await l1Connection.getLatestBlockhash("confirmed")
         tx.recentBlockhash = blockhash
         tx.feePayer = publicKey
         const signed = await signTransaction(tx)
-        const sig = await l1Connection.sendRawTransaction(signed.serialize(), { skipPreflight: false })
+        sig = await l1Connection.sendRawTransaction(signed.serialize(), { skipPreflight: false })
         await l1Connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: sig }, "confirmed")
       }
+      setTxSig(sig)
 
       router.push(`/game/${gamePDA.toBase58()}`)
     } catch (e: any) {
-      setError(e?.message ?? "Failed to create game")
+      setError(parseError(e))
     } finally {
       setLoading(false)
     }
@@ -161,7 +184,22 @@ export function CreateGameForm() {
 
       <div className="text-xs text-gray-600">Session key created in same tx — no extra popups needed.</div>
 
-      {error && <div className="text-red-400 text-sm">{error}</div>}
+      {error && (
+        <div className="flex items-start gap-2 text-sm bg-red-950/40 border border-red-800 rounded px-3 py-2">
+          <span className="text-red-400 mt-0.5 shrink-0">✕</span>
+          <span className="text-red-300">{error}</span>
+        </div>
+      )}
+      {txSig && (
+        <a
+          href={EXPLORER(txSig)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-xs font-mono text-blue-400 underline hover:text-blue-300 text-center"
+        >
+          ↗ View transaction: {txSig.slice(0, 8)}…{txSig.slice(-8)}
+        </a>
+      )}
 
       <button type="submit" disabled={loading}
         className="w-full py-3 bg-green-700 hover:bg-green-600 disabled:bg-gray-800 disabled:text-gray-600 text-white font-bold rounded transition-colors">

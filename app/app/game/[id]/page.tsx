@@ -79,6 +79,9 @@ async function pollUntilDelegated(
 const EXPLORER = (sig: string) =>
   `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
 
+const ER_EXPLORER = (sig: string) =>
+  `https://explorer.solana.com/tx/${sig}?cluster=custom&customUrl=https%3A%2F%2Fdevnet-as.magicblock.app%2F`;
+
 async function sendL1SkipPreflight(
   tx: Transaction,
   feePayer: PublicKey,
@@ -221,39 +224,29 @@ export default function GamePage() {
     }
   };
 
-  function parseJoinError(e: any): string {
+  function parseTxError(e: any): string {
     if (e?.error?.errorMessage) return e.error.errorMessage;
-    const logs: string[] = e?.logs ?? e?.transactionLogs ?? [];
+    const logs: string[] =
+      e?.logs ??
+      e?.transactionLogs ??
+      (typeof e?.getLogs === "function" ? e.getLogs() : []) ??
+      [];
     for (const log of logs) {
       const anchor = log.match(/AnchorError[^:]*: ([^\n]+)/);
       if (anchor) return anchor[1].trim();
       const msg = log.match(/Error Message: (.+)/);
       if (msg) return msg[1].trim();
-      const custom = log.match(/Program log: ([A-Z][a-zA-Z]+Error[^\n]*)/);
-      if (custom) return custom[1].trim();
-    }
-    const raw: string = e?.message ?? String(e) ?? "Join failed";
-    return raw.length > 180 ? raw.slice(0, 180) + "…" : raw;
-  }
-
-  // Extract a readable error from a Solana/Anchor exception
-  function parseStartError(e: any): string {
-    // Anchor decoded error
-    if (e?.error?.errorMessage) return e.error.errorMessage;
-    // Parse program logs — most reliable source of truth
-    const logs: string[] = e?.logs ?? e?.transactionLogs ?? [];
-    for (const log of logs) {
-      const anchor = log.match(/AnchorError[^:]*: ([^\n]+)/);
-      if (anchor) return anchor[1].trim();
-      const msg = log.match(/Error Message: (.+)/);
-      if (msg) return msg[1].trim();
-      const custom = log.match(/Program log: ([A-Z][a-zA-Z]+Error[^\n]*)/);
-      if (custom) return custom[1].trim();
+      const transfer = log.match(/Transfer: (.+)/);
+      if (transfer) return transfer[1].trim();
     }
     const raw: string = e?.message ?? String(e) ?? "Unknown error";
-    // Shorten enormous base58-encoded simulation blobs
-    return raw.length > 180 ? raw.slice(0, 180) + "…" : raw;
+    const simMatch = raw.match(/Transaction simulation failed: (.+?)(?:\. Logs:|$)/);
+    if (simMatch) return simMatch[1].trim();
+    return raw.length > 200 ? raw.slice(0, 200) + "…" : raw;
   }
+
+  const parseJoinError = parseTxError;
+  const parseStartError = parseTxError;
 
   const handleCheckDelegation = async () => {
     if (!gamePDA || !game) return;
@@ -663,7 +656,7 @@ export default function GamePage() {
       setSettleSig(sig);
       setSettleProgress(null);
     } catch (e: any) {
-      setSettleError(e?.message ?? "Settlement failed");
+      setSettleError(parseTxError(e));
       setSettleProgress(null);
     } finally {
       setSettling(false);
@@ -719,7 +712,10 @@ export default function GamePage() {
           {!isPlayer && !isFull && (
             <div className="space-y-2">
               {joinError && (
-                <div className="text-red-400 text-xs">{joinError}</div>
+                <div className="flex items-start gap-2 text-sm bg-red-950/40 border border-red-800 rounded px-3 py-2">
+                  <span className="text-red-400 mt-0.5 shrink-0">✕</span>
+                  <span className="text-red-300">{joinError}</span>
+                </div>
               )}
               {joinSig && (
                 <div className="text-xs">
@@ -729,7 +725,7 @@ export default function GamePage() {
                     rel="noopener noreferrer"
                     className="text-blue-400 underline hover:text-blue-300 font-mono"
                   >
-                    ↗ Join tx: {joinSig.slice(0, 8)}…{joinSig.slice(-8)}
+                    ↗ Join tx confirmed: {joinSig.slice(0, 8)}…{joinSig.slice(-8)}
                   </a>
                 </div>
               )}
@@ -751,22 +747,26 @@ export default function GamePage() {
                 <div className="text-blue-400 text-xs">{startStatus}</div>
               )}
               {startError && (
-                <div className="text-red-400 text-xs bg-red-950/30 border border-red-900 rounded px-2 py-1">
-                  {startError}
+                <div className="flex items-start gap-2 text-sm bg-red-950/40 border border-red-800 rounded px-3 py-2">
+                  <span className="text-red-400 mt-0.5 shrink-0">✕</span>
+                  <span className="text-red-300">{startError}</span>
                 </div>
               )}
-              {txLinks.map(({ label, sig }) => (
-                <div key={sig} className="text-xs">
-                  <a
-                    href={EXPLORER(sig)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 underline hover:text-blue-300 font-mono"
-                  >
-                    ↗ {label}: {sig.slice(0, 8)}…{sig.slice(-8)}
-                  </a>
-                </div>
-              ))}
+              {txLinks.map(({ label, sig }) => {
+                const isEr = label.includes("(ER)");
+                return (
+                  <div key={sig} className="text-xs">
+                    <a
+                      href={isEr ? ER_EXPLORER(sig) : EXPLORER(sig)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 underline hover:text-blue-300 font-mono"
+                    >
+                      ↗ {label}: {sig.slice(0, 8)}…{sig.slice(-8)}
+                    </a>
+                  </div>
+                );
+              })}
               {/* Delegation status checklist */}
               {delegationStatus && (
                 <div className="border border-gray-800 rounded px-3 py-2 space-y-1">
@@ -977,8 +977,9 @@ export default function GamePage() {
                     </div>
                   )}
                   {settleError && (
-                    <div className="text-red-400 text-xs bg-red-950/30 border border-red-900 rounded px-2 py-1">
-                      {settleError}
+                    <div className="flex items-start gap-2 text-sm bg-red-950/40 border border-red-800 rounded px-3 py-2">
+                      <span className="text-red-400 mt-0.5 shrink-0">✕</span>
+                      <span className="text-red-300">{settleError}</span>
                     </div>
                   )}
                   <button

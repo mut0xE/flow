@@ -10,6 +10,25 @@ import { getPlayerPDA } from "@/lib/pdas";
 import { ORACLE_SOL_USD } from "@/lib/oracle";
 import { SESSION_PROGRAM_ID } from "@/lib/session";
 
+const ER_EXPLORER = (sig: string) =>
+  `https://explorer.solana.com/tx/${sig}?cluster=custom&customUrl=https%3A%2F%2Fdevnet-as.magicblock.app%2F`;
+
+function parseError(e: any): string {
+  if (e?.error?.errorMessage) return e.error.errorMessage;
+  const logs: string[] =
+    e?.logs ?? (typeof e?.getLogs === "function" ? e.getLogs() : []) ?? [];
+  for (const log of logs) {
+    const anchor = log.match(/AnchorError[^:]*: ([^\n]+)/);
+    if (anchor) return anchor[1].trim();
+    const msg = log.match(/Error Message: (.+)/);
+    if (msg) return msg[1].trim();
+  }
+  const raw: string = e?.message ?? String(e);
+  const simMatch = raw.match(/Transaction simulation failed: (.+?)(?:\. Logs:|$)/);
+  if (simMatch) return simMatch[1].trim();
+  return raw.length > 200 ? raw.slice(0, 200) + "…" : raw;
+}
+
 interface Props {
   game: GameState;
   gamePDA: PublicKey;
@@ -34,17 +53,7 @@ export function PassButton({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  console.log("PASS ACCOUNTS", {
-    signer: tempKeypair?.publicKey?.toBase58(),
-    sessionToken: sessionTokenPDA?.toBase58(),
-  });
-
-  console.log("PASS DEBUG", {
-    wallet: publicKey?.toBase58(),
-    currentHolder: game.currentHolder.toBase58(),
-    players: game.players.map((p) => p.toBase58()),
-  });
-
+  const [txSig, setTxSig] = useState<string | null>(null);
   const isMyTurn =
     publicKey && game.currentHolder.toBase58() === publicKey.toBase58();
   const isActive = "active" in game.status;
@@ -53,6 +62,7 @@ export function PassButton({
     if (!selected || !publicKey || !tempKeypair || !sessionTokenPDA) return;
     setLoading(true);
     setError(null);
+    setTxSig(null);
     try {
       const erConnection = getErConnection();
       const nextPlayer = new PublicKey(selected);
@@ -105,26 +115,27 @@ export function PassButton({
         maxSupportedTransactionVersion: 0,
       });
 
-      console.log("PASS TX ERR", txInfo?.meta?.err);
-      console.log("PASS LOGS", txInfo?.meta?.logMessages);
-
       if (txInfo?.meta?.err) {
-        throw new Error(
-          "Pass failed: " +
-            JSON.stringify(txInfo.meta.err) +
-            "\n" +
-            (txInfo?.meta?.logMessages ?? []).join("\n")
-        );
+        const errLogs = txInfo?.meta?.logMessages ?? [];
+        let reason = "";
+        for (const log of errLogs) {
+          const anchor = log.match(/AnchorError[^:]*: ([^\n]+)/);
+          if (anchor) { reason = anchor[1].trim(); break; }
+          const msg = log.match(/Error Message: (.+)/);
+          if (msg) { reason = msg[1].trim(); break; }
+        }
+        throw new Error(reason || "Pass failed: " + JSON.stringify(txInfo.meta.err));
       }
 
       await erConnection.confirmTransaction(
         { blockhash, lastValidBlockHeight, signature: sig },
         "confirmed"
       );
+      setTxSig(sig);
       setSelected(null);
       onPass?.();
     } catch (e: any) {
-      setError(e?.message ?? "Pass failed");
+      setError(parseError(e));
     } finally {
       setLoading(false);
     }
@@ -144,7 +155,7 @@ export function PassButton({
   if (!isMyTurn) {
     return (
       <div className="space-y-3">
-        <div className="text-xs text-gray-500 uppercase tracking-wider">Pass Potato To</div>
+        <div className="text-xs text-gray-500 uppercase tracking-wider">Pass Position</div>
         <button
           disabled
           className="w-full py-3 bg-gray-800 text-gray-600 font-bold rounded cursor-not-allowed"
@@ -158,7 +169,7 @@ export function PassButton({
   return (
     <div className="space-y-3">
       <div className="text-xs text-gray-500 uppercase tracking-wider">
-        Pass potato to
+        Pass Position To
       </div>
       <div className="flex flex-wrap gap-2">
         {otherPlayers.map((p) => (
@@ -178,13 +189,28 @@ export function PassButton({
       {!sessionTokenPDA && (
         <div className="text-amber-400 text-xs">Create or renew your session before passing.</div>
       )}
-      {error && <div className="text-red-400 text-xs">{error}</div>}
+      {error && (
+        <div className="flex items-start gap-2 text-sm bg-red-950/40 border border-red-800 rounded px-3 py-2">
+          <span className="text-red-400 mt-0.5 shrink-0">✕</span>
+          <span className="text-red-300">{error}</span>
+        </div>
+      )}
+      {txSig && (
+        <a
+          href={ER_EXPLORER(txSig)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-xs font-mono text-blue-400 underline hover:text-blue-300 text-center"
+        >
+          ↗ Pass tx confirmed: {txSig.slice(0, 8)}…{txSig.slice(-8)}
+        </a>
+      )}
       <button
         onClick={handlePass}
         disabled={!selected || !sessionTokenPDA || loading}
         className="w-full py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-600 text-white font-bold rounded transition-colors"
       >
-        {loading ? "Passing..." : "PASS 🥔"}
+        {loading ? "Passing..." : "PASS"}
       </button>
     </div>
   );
