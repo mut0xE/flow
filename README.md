@@ -8,8 +8,7 @@ A real-time on-chain game where players compete by holding a virtual position th
 | | |
 |---|---|
 | Network | Solana Devnet |
-| Program ID | `4ZAPNxawvTPH41hJ2VhWGwGttPWNXmbqnXFwehTCjyPs` |
-| IDL Account | `B2eS1Zw1qLZYr4sqH4zETwJugKaLpSarxMq1d4LQ6syD` |
+| Program ID | `DqudaX63SvHn6LLe4SERwxNoiLvyLNfjYjgAVcjH9szp` |
 | ER RPC | `https://devnet.magicblock.app` |
 | L1 RPC | Helius Devnet |
 
