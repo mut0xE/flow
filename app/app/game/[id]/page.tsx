@@ -4,7 +4,10 @@ import { useMemo, useState } from "react";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
-import { MAGIC_PROGRAM_ID, GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
+import {
+  MAGIC_PROGRAM_ID,
+  GetCommitmentSignature,
+} from "@magicblock-labs/ephemeral-rollups-sdk";
 import { useGame } from "@/hooks/useGame";
 import { GameBoard } from "@/components/game/GameBoard";
 import { l1Connection, getErConnection, ER_RPC } from "@/lib/connections";
@@ -12,10 +15,8 @@ import { getProgram, PROGRAM_ID } from "@/lib/anchor";
 import { getPlayerPDA, getVaultPDA } from "@/lib/pdas";
 import { ORACLE_SOL_USD } from "@/lib/oracle";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
-import {
-  buildCreateSessionIx,
-  getSessionIdentity,
-} from "@/lib/session";
+import { buildCreateSessionIx, getSessionIdentity } from "@/lib/session";
+import { useEffect } from "react";
 
 async function fetchErValidator(): Promise<PublicKey> {
   const res = await fetch(ER_RPC, {
@@ -116,11 +117,20 @@ export default function GamePage() {
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
-  const [joinSig, setJoinSig] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startStatus, setStartStatus] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
-  const [txLinks, setTxLinks] = useState<{ label: string; sig: string }[]>([]);
+  const storageKey = gamePDA ? `flow_txlinks_${gamePDA.toBase58()}` : null;
+  const settleStorageKey = gamePDA ? `flow_settlesig_${gamePDA.toBase58()}` : null;
+  const joinStorageKey = gamePDA ? `flow_joinsig_${gamePDA.toBase58()}` : null;
+
+  const [txLinks, setTxLinks] = useState<{ label: string; sig: string }[]>(() => {
+    if (typeof window === "undefined" || !gamePDA) return [];
+    try {
+      const stored = localStorage.getItem(`flow_txlinks_${gamePDA.toBase58()}`);
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
   const [delegationStatus, setDelegationStatus] = useState<
     { label: string; delegated: boolean }[] | null
   >(null);
@@ -129,7 +139,26 @@ export default function GamePage() {
   const [settling, setSettling] = useState(false);
   const [settleProgress, setSettleProgress] = useState<string | null>(null);
   const [settleError, setSettleError] = useState<string | null>(null);
-  const [settleSig, setSettleSig] = useState<string | null>(null);
+  const [settleSig, setSettleSig] = useState<string | null>(() => {
+    if (typeof window === "undefined" || !gamePDA) return null;
+    try { return localStorage.getItem(`flow_settlesig_${gamePDA.toBase58()}`); } catch { return null; }
+  });
+  const [joinSig, setJoinSig] = useState<string | null>(() => {
+    if (typeof window === "undefined" || !gamePDA) return null;
+    try { return localStorage.getItem(`flow_joinsig_${gamePDA.toBase58()}`); } catch { return null; }
+  });
+
+  useEffect(() => {
+    if (storageKey) localStorage.setItem(storageKey, JSON.stringify(txLinks));
+  }, [txLinks, storageKey]);
+
+  useEffect(() => {
+    if (settleStorageKey && settleSig) localStorage.setItem(settleStorageKey, settleSig);
+  }, [settleSig, settleStorageKey]);
+
+  useEffect(() => {
+    if (joinStorageKey && joinSig) localStorage.setItem(joinStorageKey, joinSig);
+  }, [joinSig, joinStorageKey]);
 
   if (!gamePDA)
     return <div className="text-red-400">Invalid game address.</div>;
@@ -186,7 +215,10 @@ export default function GamePage() {
       const tx = new Transaction().add(joinIx);
 
       // Bundle session creation into same tx, skipping stale wrong-owner tokens.
-      const { sessionKp, exists: existingSession } = await getSessionIdentity(publicKey, l1Connection);
+      const { sessionKp, exists: existingSession } = await getSessionIdentity(
+        publicKey,
+        l1Connection
+      );
 
       let sig: string;
       if (!existingSession) {
@@ -240,7 +272,9 @@ export default function GamePage() {
       if (transfer) return transfer[1].trim();
     }
     const raw: string = e?.message ?? String(e) ?? "Unknown error";
-    const simMatch = raw.match(/Transaction simulation failed: (.+?)(?:\. Logs:|$)/);
+    const simMatch = raw.match(
+      /Transaction simulation failed: (.+?)(?:\. Logs:|$)/
+    );
     if (simMatch) return simMatch[1].trim();
     return raw.length > 200 ? raw.slice(0, 200) + "…" : raw;
   }
@@ -502,13 +536,28 @@ export default function GamePage() {
       const secsRemaining = Math.max(60, game.endsAt.toNumber() - now);
       const iterations = Math.ceil((secsRemaining * 1000) / 100) + 200;
 
-      console.log("[schedule_tick] game.endsAt:", game.endsAt.toNumber(), "now:", now, "secsRemaining:", secsRemaining, "iterations:", iterations);
+      console.log(
+        "[schedule_tick] game.endsAt:",
+        game.endsAt.toNumber(),
+        "now:",
+        now,
+        "secsRemaining:",
+        secsRemaining,
+        "iterations:",
+        iterations
+      );
 
       if (erGameStatus === "active") {
         setStartStatus("Crank already running — skipping.");
       } else {
         setStartStatus("Scheduling crank…");
-        console.log("[schedule_tick] scheduling with", iterations, "iterations @100ms =", (iterations * 100 / 1000).toFixed(0), "seconds");
+        console.log(
+          "[schedule_tick] scheduling with",
+          iterations,
+          "iterations @100ms =",
+          ((iterations * 100) / 1000).toFixed(0),
+          "seconds"
+        );
         const scheduleIx = await (erProgramSigned.methods as any)
           .scheduleTick(game.gameId, {
             taskId: new BN(1),
@@ -585,7 +634,8 @@ export default function GamePage() {
 
       // Check if game is already committed to L1 (owned by Flow program and undelegated)
       const gameAccountInfo = await l1Connection.getAccountInfo(gamePDA);
-      const alreadyCommitted = !!gameAccountInfo?.owner.equals(PROGRAM_ID) && "ended" in game.status;
+      const alreadyCommitted =
+        !!gameAccountInfo?.owner.equals(PROGRAM_ID) && "ended" in game.status;
 
       if (!alreadyCommitted) {
         const erProgram = getProgram(
@@ -609,22 +659,39 @@ export default function GamePage() {
           }));
           const commitIx = await (erProgram.methods as any)
             .commitAndSettle()
-            .accounts({ signer: erSignerKey, game: gamePDA, priceFeed: ORACLE_SOL_USD, systemProgram: SystemProgram.programId })
+            .accounts({
+              signer: erSignerKey,
+              game: gamePDA,
+              priceFeed: ORACLE_SOL_USD,
+              systemProgram: SystemProgram.programId,
+            })
             .remainingAccounts(playerRemainingAccounts)
             .instruction();
 
           const tx = new Transaction().add(commitIx);
-          const { value: { blockhash, lastValidBlockHeight } } = await erConn.getLatestBlockhashAndContext();
+          const {
+            value: { blockhash, lastValidBlockHeight },
+          } = await erConn.getLatestBlockhashAndContext();
           tx.recentBlockhash = blockhash;
           tx.feePayer = erSignerKey;
           tx.sign(sessionKp);
-          const erSig = await erConn.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+          const erSig = await erConn.sendRawTransaction(tx.serialize(), {
+            skipPreflight: true,
+          });
 
           setSettleProgress("Confirming on Ephemeral Rollup…");
-          await erConn.confirmTransaction({ blockhash, lastValidBlockHeight, signature: erSig }, "confirmed");
+          await erConn.confirmTransaction(
+            { blockhash, lastValidBlockHeight, signature: erSig },
+            "confirmed"
+          );
 
-          const txInfo = await erConn.getTransaction(erSig, { maxSupportedTransactionVersion: 0 });
-          if (txInfo?.meta?.err) throw new Error("commitAndSettle failed: " + JSON.stringify(txInfo.meta.err));
+          const txInfo = await erConn.getTransaction(erSig, {
+            maxSupportedTransactionVersion: 0,
+          });
+          if (txInfo?.meta?.err)
+            throw new Error(
+              "commitAndSettle failed: " + JSON.stringify(txInfo.meta.err)
+            );
 
           setSettleProgress("Waiting for L1 commitment…");
           await GetCommitmentSignature(erSig, erConn);
@@ -638,20 +705,86 @@ export default function GamePage() {
         new AnchorProvider(l1Connection, {} as any, { commitment: "confirmed" })
       );
       const [vaultPDA] = getVaultPDA(gamePDA);
-      const TREASURY = new PublicKey("mtqK4nCocC1A7K13oMxqcRY8DPbqAbVwmg7iCY5NvQU");
+      const TREASURY = new PublicKey(
+        "mtqK4nCocC1A7K13oMxqcRY8DPbqAbVwmg7iCY5NvQU"
+      );
       const settleIx = await (l1Program.methods as any)
         .settle()
-        .accounts({ game: gamePDA, vault: vaultPDA, caller: publicKey, treasury: TREASURY })
-        .remainingAccounts(game.players.map((w) => ({ pubkey: w, isSigner: false, isWritable: true })))
+        .accounts({
+          game: gamePDA,
+          vault: vaultPDA,
+          caller: publicKey,
+          treasury: TREASURY,
+        })
+        .remainingAccounts(
+          game.players.map((w) => ({
+            pubkey: w,
+            isSigner: false,
+            isWritable: true,
+          }))
+        )
         .instruction();
 
       const settleTx = new Transaction().add(settleIx);
-      const { blockhash: sBh, lastValidBlockHeight: sLvbh } = await l1Connection.getLatestBlockhash("confirmed");
+      const { blockhash: sBh, lastValidBlockHeight: sLvbh } =
+        await l1Connection.getLatestBlockhash("confirmed");
       settleTx.recentBlockhash = sBh;
       settleTx.feePayer = publicKey;
       const signedSettleTx = await signTransaction(settleTx);
-      const sig = await l1Connection.sendRawTransaction(signedSettleTx.serialize(), { skipPreflight: true });
-      await l1Connection.confirmTransaction({ blockhash: sBh, lastValidBlockHeight: sLvbh, signature: sig }, "confirmed");
+      const sig = await l1Connection.sendRawTransaction(
+        signedSettleTx.serialize(),
+        { skipPreflight: true }
+      );
+      await l1Connection.confirmTransaction(
+        { blockhash: sBh, lastValidBlockHeight: sLvbh, signature: sig },
+        "confirmed"
+      );
+
+      setSettleSig(sig);
+      setSettleProgress(null);
+    } catch (e: any) {
+      setSettleError(parseTxError(e));
+      setSettleProgress(null);
+    } finally {
+      setSettling(false);
+    }
+  };
+
+  const handleCancelGame = async () => {
+    if (!publicKey || !signTransaction || !gamePDA || !game) return;
+    setSettling(true);
+    setSettleError(null);
+    setSettleProgress("Cancelling game and refunding players…");
+    try {
+      const l1Program = getProgram(
+        new AnchorProvider(l1Connection, {} as any, { commitment: "confirmed" })
+      );
+      const [vaultPDA] = getVaultPDA(gamePDA);
+      const cancelIx = await (l1Program.methods as any)
+        .cancelGame()
+        .accounts({ caller: publicKey, game: gamePDA, vault: vaultPDA })
+        .remainingAccounts(
+          game.players.map((w) => ({
+            pubkey: w,
+            isSigner: false,
+            isWritable: true,
+          }))
+        )
+        .instruction();
+
+      const cancelTx = new Transaction().add(cancelIx);
+      const { blockhash, lastValidBlockHeight } =
+        await l1Connection.getLatestBlockhash("confirmed");
+      cancelTx.recentBlockhash = blockhash;
+      cancelTx.feePayer = publicKey;
+      const signed = await signTransaction(cancelTx);
+      const sig = await l1Connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+      });
+      await l1Connection.confirmTransaction(
+        { blockhash, lastValidBlockHeight, signature: sig },
+        "confirmed"
+      );
 
       setSettleSig(sig);
       setSettleProgress(null);
@@ -683,7 +816,7 @@ export default function GamePage() {
       </div>
 
       {/* Waiting room */}
-      {isWaiting && (
+      {isWaiting && !isEffectivelyEnded && (
         <div className="border border-gray-800 rounded p-4 space-y-4">
           <div className="flex items-center justify-between">
             <div className="text-sm text-yellow-400 font-bold">
@@ -725,7 +858,8 @@ export default function GamePage() {
                     rel="noopener noreferrer"
                     className="text-blue-400 underline hover:text-blue-300 font-mono"
                   >
-                    ↗ Join tx confirmed: {joinSig.slice(0, 8)}…{joinSig.slice(-8)}
+                    ↗ Join tx confirmed: {joinSig.slice(0, 8)}…
+                    {joinSig.slice(-8)}
                   </a>
                 </div>
               )}
@@ -816,14 +950,11 @@ export default function GamePage() {
                   disabled={starting}
                   className="flex-1 py-2 bg-green-800 hover:bg-green-700 disabled:bg-gray-800 disabled:text-gray-600 text-white text-sm rounded font-bold"
                 >
-                  {starting
-                    ? startStatus ?? "Starting..."
-                    : "Delegate & Start Game"}
+                  {starting ? startStatus ?? "Starting..." : "Start Game"}
                 </button>
               </div>
               <div className="text-xs text-gray-600 text-center">
-                1-2 popups: session (if new) + delegation — start &amp; crank
-                run silently
+                game starts
               </div>
             </div>
           )}
@@ -840,8 +971,8 @@ export default function GamePage() {
         </div>
       )}
 
-      {/* History panel — shown for ended or settled games (replaces GameBoard) */}
-      {isEffectivelyEnded || isSettled ? (
+      {/* History panel — shown for ended, settled, or expired-waiting games */}
+      {isEffectivelyEnded || isSettled || (isWaiting && timerExpired) ? (
         (() => {
           const totalPool = game.totalDeposited.toNumber();
           const scoreNums = game.scores.map((s) => s.toNumber());
@@ -867,10 +998,18 @@ export default function GamePage() {
                         ? "text-gray-400 border-gray-600"
                         : isEnded
                         ? "text-red-400 border-red-800"
+                        : isWaiting
+                        ? "text-yellow-600 border-yellow-800"
                         : "text-orange-400 border-orange-800"
                     }`}
                   >
-                    {isSettled ? "Settled" : isEnded ? "Ended" : "Ending…"}
+                    {isSettled
+                      ? "Settled"
+                      : isEnded
+                      ? "Ended"
+                      : isWaiting
+                      ? "Expired"
+                      : "Ending…"}
                   </span>
                   <span
                     className={`text-sm font-bold ${
@@ -913,10 +1052,10 @@ export default function GamePage() {
                 </div>
               </div>
 
-              {/* Scores + payouts per player */}
+              {/* Players + results */}
               <div className="space-y-1">
                 <div className="text-xs text-gray-600 uppercase tracking-wider mb-2">
-                  Results
+                  {isWaiting ? "Players (refund pending)" : "Results"}
                 </div>
                 {game.players.map((wallet, i) => {
                   const score = scoreNums[i] ?? 0;
@@ -934,7 +1073,7 @@ export default function GamePage() {
                     <div
                       key={wallet.toBase58()}
                       className={`flex items-center justify-between px-3 py-2 rounded ${
-                        isWinner
+                        isWinner && !isWaiting
                           ? "bg-green-900/20 border border-green-800/40"
                           : "bg-gray-900"
                       }`}
@@ -950,16 +1089,24 @@ export default function GamePage() {
                         )}
                       </div>
                       <div className="text-right">
-                        <div
-                          className={`text-sm font-mono font-bold ${scColor}`}
-                        >
-                          {score > 0 ? "+" : ""}
-                          {(score / 10_000).toFixed(4)}%
-                        </div>
-                        {payout > 0 && (
-                          <div className="text-xs font-mono text-green-400">
-                            +{(payout / LAMPORTS_PER_SOL).toFixed(4)} SOL
+                        {isWaiting ? (
+                          <div className="text-xs font-mono text-yellow-500">
+                            {feeSol.toFixed(4)} SOL refund
                           </div>
+                        ) : (
+                          <>
+                            <div
+                              className={`text-sm font-mono font-bold ${scColor}`}
+                            >
+                              {score > 0 ? "+" : ""}
+                              {(score / 10_000).toFixed(4)}%
+                            </div>
+                            {payout > 0 && (
+                              <div className="text-xs font-mono text-green-400">
+                                +{(payout / LAMPORTS_PER_SOL).toFixed(4)} SOL
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
@@ -967,8 +1114,43 @@ export default function GamePage() {
                 })}
               </div>
 
-              {/* Commit & Settle */}
-              {isEffectivelyEnded && !isSettled && !!publicKey && !settleSig && (
+              {/* Cancel & Refund — game expired before it started, creator only */}
+              {isWaiting && timerExpired && !isSettled && !settleSig && (
+                <div className="space-y-2">
+                  <div className="text-xs text-gray-500 text-center">
+                    Game expired before it started — entry fees will be refunded
+                    to all players
+                  </div>
+                  {settleProgress && (
+                    <div className="flex items-center gap-2 text-blue-400 text-xs">
+                      <span className="animate-pulse">●</span>
+                      {settleProgress}
+                    </div>
+                  )}
+                  {settleError && (
+                    <div className="flex items-start gap-2 text-sm bg-red-950/40 border border-red-800 rounded px-3 py-2">
+                      <span className="text-red-400 mt-0.5 shrink-0">✕</span>
+                      <span className="text-red-300">{settleError}</span>
+                    </div>
+                  )}
+                  {isCreator ? (
+                    <button
+                      onClick={handleCancelGame}
+                      disabled={settling}
+                      className="w-full py-3 bg-orange-700 hover:bg-orange-600 disabled:bg-orange-900/50 disabled:text-orange-400 text-white font-bold rounded transition-colors"
+                    >
+                      {settling ? "Refunding…" : "Cancel & Refund"}
+                    </button>
+                  ) : (
+                    <div className="text-xs text-gray-500 text-center py-2">
+                      Waiting for the creator to cancel and refund.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Commit & Settle — game ran and ended normally */}
+              {isEnded && !isSettled && !!publicKey && !settleSig && (
                 <div className="space-y-2">
                   {settleProgress && (
                     <div className="flex items-center gap-2 text-blue-400 text-xs">
@@ -992,21 +1174,59 @@ export default function GamePage() {
                 </div>
               )}
 
+              {/* Transaction history — persists across page refreshes */}
+              {(txLinks.length > 0 || joinSig || settleSig) && (
+                <div className="border border-gray-800 rounded px-3 py-2 space-y-1">
+                  <div className="text-xs text-gray-600 uppercase tracking-wider mb-1">
+                    Transactions
+                  </div>
+                  {joinSig && (
+                    <div className="text-xs">
+                      <a
+                        href={EXPLORER(joinSig)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 underline hover:text-blue-300 font-mono"
+                      >
+                        ↗ Join: {joinSig.slice(0, 8)}…{joinSig.slice(-8)}
+                      </a>
+                    </div>
+                  )}
+                  {txLinks.map(({ label, sig }) => {
+                    const isEr = label.includes("(ER)");
+                    return (
+                      <div key={sig} className="text-xs">
+                        <a
+                          href={isEr ? ER_EXPLORER(sig) : EXPLORER(sig)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 underline hover:text-blue-300 font-mono"
+                        >
+                          ↗ {label}: {sig.slice(0, 8)}…{sig.slice(-8)}
+                        </a>
+                      </div>
+                    );
+                  })}
+                  {settleSig && (
+                    <div className="text-xs">
+                      <a
+                        href={EXPLORER(settleSig)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 underline hover:text-blue-300 font-mono"
+                      >
+                        ↗ Settle: {settleSig.slice(0, 8)}…{settleSig.slice(-8)}
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {(settleSig || isSettled) && (
                 <div className="space-y-2">
                   <div className="text-center text-green-400 text-sm font-bold py-3 border border-green-900/60 rounded bg-green-950/20">
                     Payouts distributed
                   </div>
-                  {settleSig && (
-                    <a
-                      href={`https://explorer.solana.com/tx/${settleSig}?cluster=devnet`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block text-blue-400 underline text-xs font-mono text-center"
-                    >
-                      View settle tx ↗
-                    </a>
-                  )}
                 </div>
               )}
             </div>

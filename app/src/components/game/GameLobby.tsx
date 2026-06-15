@@ -221,15 +221,15 @@ export function GameLobby() {
 
     if (variant === "open") {
       const isWaiting = "waiting" in account.status;
-      const canJoin = isWaiting && account.playerCount < account.maxPlayers;
-      const statusLabel = isWaiting ? "WAITING" : "ACTIVE";
-      const statusColor = isWaiting ? "text-yellow-400" : "text-green-400";
       const countdown = timeRemaining(account.endsAt.toNumber(), now);
       const expired = countdown === "Expired";
+      const canJoin = isWaiting && !expired && account.playerCount < account.maxPlayers;
+      const statusLabel = expired ? "EXPIRED" : isWaiting ? "WAITING" : "ACTIVE";
+      const statusColor = expired ? "text-gray-500" : isWaiting ? "text-yellow-400" : "text-green-400";
       return (
         <Link href={`/game/${pdaFull}`}>
           <div
-            className="border border-gray-500 rounded p-4 transition-colors cursor-pointer bg-gray-800 hover:border-gray-300"
+            className={`border rounded p-4 transition-colors cursor-pointer ${expired ? "border-gray-700 bg-gray-900 opacity-60" : "border-gray-500 bg-gray-800 hover:border-gray-300"}`}
           >
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">

@@ -1,3 +1,4 @@
+pub mod cancel_game;
 pub mod commit_and_settle;
 pub mod create_game;
 pub mod delegate;
@@ -7,6 +8,7 @@ pub mod settle;
 pub mod start_game;
 pub mod tick_price;
 
+pub use cancel_game::*;
 pub use commit_and_settle::*;
 pub use create_game::*;
 pub use delegate::*;

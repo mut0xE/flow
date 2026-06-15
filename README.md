@@ -55,6 +55,7 @@ Solana L1  (Helius Devnet)
   create_game       — GameState + Vault + creator PlayerAccount
   join_game         — player PlayerAccount, entry fee deposited
   delegate_account  — locks PDAs and mirrors them to ER
+  cancel_game       — refunds all players if game expired before starting
   settle            — distributes vault after committed state lands on L1
 
 Ephemeral Rollup  (devnet.magicblock.app)
@@ -151,22 +152,6 @@ Test scripts are defined in `package.json`:
 "test:flow": "ts-mocha -p ./tsconfig.json -t 1000000 \"tests/flow.ts\"",
 "test:all": "ts-mocha -p ./tsconfig.json -t 1000000 \"tests/flow.ts\" \"tests/failure.ts\""
 ```
-
-The happy-path suite covers:
-
-| # | What it tests |
-|---|---|
-| 1 | `create_game` — GameState fields, vault balance |
-| 2 | `join_game` — player count, vault = 2x entry fee |
-| 3-6 | Delegate all PDAs + `start_game` via session key |
-| 7 | `schedule_tick` — crank registered |
-| 8-9 | Session creation for creator and player2 |
-| 10 | `pass` creator to player2 |
-| 11 | `pass` player2 back to creator |
-| 12 | `commit_and_settle` — polls ER for Ended, commits, settles |
-| 13 | Verify settlement — vault drained, payouts match score formula |
-
----
 
 ## Docs
 

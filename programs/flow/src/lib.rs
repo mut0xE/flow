@@ -72,4 +72,10 @@ pub mod flow {
     pub fn settle<'info>(ctx: Context<'_, '_, 'info, 'info, Settle<'info>>) -> Result<()> {
         settle::handler(ctx)
     }
+
+    pub fn cancel_game<'info>(
+        ctx: Context<'_, '_, 'info, 'info, CancelGame<'info>>,
+    ) -> Result<()> {
+        cancel_game::handler(ctx)
+    }
 }

@@ -8,6 +8,60 @@
   },
   "instructions": [
     {
+      "name": "cancel_game",
+      "discriminator": [121, 194, 154, 118, 103, 235, 149, 52],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "game",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [103, 97, 109, 101]
+              },
+              {
+                "kind": "account",
+                "path": "game.game_id",
+                "account": "GameState"
+              },
+              {
+                "kind": "account",
+                "path": "game.creator",
+                "account": "GameState"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "game"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "commit_and_settle",
       "discriminator": [82, 154, 16, 183, 6, 4, 212, 85],
       "accounts": [
