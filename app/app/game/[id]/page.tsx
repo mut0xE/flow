@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { AnchorProvider, BN } from "@coral-xyz/anchor";
-import { MAGIC_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
+import { MAGIC_PROGRAM_ID, GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { useGame } from "@/hooks/useGame";
 import { GameBoard } from "@/components/game/GameBoard";
 import { l1Connection, getErConnection, ER_RPC } from "@/lib/connections";
@@ -13,13 +13,9 @@ import { getPlayerPDA, getVaultPDA } from "@/lib/pdas";
 import { ORACLE_SOL_USD } from "@/lib/oracle";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import {
-  deriveTempKeypair,
-  getSessionTokenPDA,
-  getSessionProgramId,
   buildCreateSessionIx,
-  sessionNonceKey,
+  getSessionIdentity,
 } from "@/lib/session";
-import { SessionTokenManager } from "@magicblock-labs/gum-sdk";
 
 async function fetchErValidator(): Promise<PublicKey> {
   const res = await fetch(ER_RPC, {
@@ -113,7 +109,7 @@ export default function GamePage() {
       return null;
     }
   }, [id]);
-  const { game, loading } = useGame(gamePDA);
+  const { game, loading, refetch } = useGame(gamePDA);
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -126,6 +122,11 @@ export default function GamePage() {
     { label: string; delegated: boolean }[] | null
   >(null);
   const [copied, setCopied] = useState(false);
+  // Settle state — lives here so it survives the Active→Ended layout switch
+  const [settling, setSettling] = useState(false);
+  const [settleProgress, setSettleProgress] = useState<string | null>(null);
+  const [settleError, setSettleError] = useState<string | null>(null);
+  const [settleSig, setSettleSig] = useState<string | null>(null);
 
   if (!gamePDA)
     return <div className="text-red-400">Invalid game address.</div>;
@@ -138,8 +139,12 @@ export default function GamePage() {
   const isCreator =
     publicKey && game.creator.toBase58() === publicKey.toBase58();
   const isWaiting = "waiting" in game.status;
+  const isActive = "active" in game.status;
   const isEnded = "ended" in game.status;
   const isSettled = "settled" in game.status;
+  const timerExpired = game.endsAt.toNumber() <= Math.floor(Date.now() / 1000);
+  // Treat as ended if on-chain says ended OR timer has expired (crank may lag)
+  const isEffectivelyEnded = isEnded || timerExpired;
   const isFull = game.playerCount >= game.maxPlayers;
   const feeSol = game.entryFee.toNumber() / LAMPORTS_PER_SOL;
 
@@ -177,24 +182,13 @@ export default function GamePage() {
 
       const tx = new Transaction().add(joinIx);
 
-      // Bundle session creation into same tx
-      const nonce = localStorage.getItem(sessionNonceKey(publicKey)) ?? "0";
-      const sessionKp = deriveTempKeypair(publicKey, nonce);
-      const sessionProgramId = getSessionProgramId(
-        publicKey,
-        signTransaction as any
-      );
-      const sessionPDA = getSessionTokenPDA(
-        sessionKp,
-        publicKey,
-        sessionProgramId
-      );
-      const existingSession = await l1Connection.getAccountInfo(sessionPDA);
+      // Bundle session creation into same tx, skipping stale wrong-owner tokens.
+      const { sessionKp, exists: existingSession } = await getSessionIdentity(publicKey, l1Connection);
 
       let sig: string;
       if (!existingSession) {
         const validUntil = new BN(
-          Math.floor(Date.now() / 1000) + 6 * 24 * 3600
+          Math.floor(Date.now() / 1000) + 1 * 24 * 3600
         );
         const sessionIx = await buildCreateSessionIx(
           publicKey,
@@ -221,11 +215,26 @@ export default function GamePage() {
       }
       setJoinSig(sig);
     } catch (e: any) {
-      setJoinError(e?.message ?? "Join failed");
+      setJoinError(parseJoinError(e));
     } finally {
       setJoining(false);
     }
   };
+
+  function parseJoinError(e: any): string {
+    if (e?.error?.errorMessage) return e.error.errorMessage;
+    const logs: string[] = e?.logs ?? e?.transactionLogs ?? [];
+    for (const log of logs) {
+      const anchor = log.match(/AnchorError[^:]*: ([^\n]+)/);
+      if (anchor) return anchor[1].trim();
+      const msg = log.match(/Error Message: (.+)/);
+      if (msg) return msg[1].trim();
+      const custom = log.match(/Program log: ([A-Z][a-zA-Z]+Error[^\n]*)/);
+      if (custom) return custom[1].trim();
+    }
+    const raw: string = e?.message ?? String(e) ?? "Join failed";
+    return raw.length > 180 ? raw.slice(0, 180) + "…" : raw;
+  }
 
   // Extract a readable error from a Solana/Anchor exception
   function parseStartError(e: any): string {
@@ -283,45 +292,23 @@ export default function GamePage() {
     try {
       // ── Step 1: session key ──────────────────────────────────────────────────
       setStartStatus("Checking session key...");
-      const nonce = localStorage.getItem(sessionNonceKey(publicKey)) ?? "0";
-      const sessionKp = deriveTempKeypair(publicKey, nonce);
-      const sessionProgramId = getSessionProgramId(
-        publicKey,
-        signTransaction as any
-      );
-      const sessionPDA = getSessionTokenPDA(
+      const {
         sessionKp,
-        publicKey,
-        sessionProgramId
-      );
-
-      const existingSession = await l1Connection.getAccountInfo(sessionPDA);
+        sessionPDA,
+        exists: existingSession,
+      } = await getSessionIdentity(publicKey, l1Connection);
       if (!existingSession) {
         setStartStatus("Creating session key… (approve wallet popup)");
         const validUntil = new BN(
-          Math.floor(Date.now() / 1000) + 6 * 24 * 3600
+          Math.floor(Date.now() / 1000) + 1 * 24 * 3600
         );
-        const sessionMgr = new SessionTokenManager(
-          {
-            publicKey,
-            signTransaction: signTransaction as any,
-            signAllTransactions: signAllTransactions as any,
-          } as any,
-          l1Connection
+        const sessionIx = await buildCreateSessionIx(
+          publicKey,
+          signTransaction as any,
+          sessionKp,
+          validUntil
         );
-        const sessionTx: Transaction = await (sessionMgr.program.methods as any)
-          .createSessionV2(
-            true,
-            validUntil,
-            new BN(Math.round(0.005 * LAMPORTS_PER_SOL))
-          )
-          .accounts({
-            targetProgram: PROGRAM_ID,
-            sessionSigner: sessionKp.publicKey,
-            feePayer: publicKey,
-            authority: publicKey,
-          })
-          .transaction();
+        const sessionTx = new Transaction().add(sessionIx);
         const { blockhash: sBh, lastValidBlockHeight: sLvbh } =
           await l1Connection.getLatestBlockhash("confirmed");
         sessionTx.recentBlockhash = sBh;
@@ -471,6 +458,7 @@ export default function GamePage() {
             signer: sessionKp.publicKey,
             game: gamePDA,
             creatorPlayer: creatorPlayerPDA,
+            sessionToken: sessionPDA,
             priceFeed: ORACLE_SOL_USD,
           })
           .instruction();
@@ -492,6 +480,18 @@ export default function GamePage() {
             },
             "confirmed"
           );
+          // Verify tx actually succeeded (skipPreflight means failed txs still confirm)
+          const startTxInfo = await erConn.getTransaction(startSig, {
+            maxSupportedTransactionVersion: 0,
+          });
+          if (startTxInfo?.meta?.err) {
+            throw new Error(
+              "start_game tx failed: " +
+                JSON.stringify(startTxInfo.meta.err) +
+                "\n" +
+                (startTxInfo?.meta?.logMessages ?? []).join("\n")
+            );
+          }
           setTxLinks((prev) => [
             ...prev,
             { label: "Start Game (ER)", sig: startSig },
@@ -502,17 +502,20 @@ export default function GamePage() {
       }
 
       // ── Step 4: schedule_tick (skip if game already Active) ─────────────────
-      const gameDurationSecs =
-        game.endsAt.toNumber() - game.startedAt.toNumber();
+      // Use time-remaining from NOW (not endsAt - startedAt) because startedAt
+      // is still 0 in React state at this point — start_game just ran on ER
+      // but the poll hasn't updated yet. Using startedAt=0 gives ~17B iterations.
+      const now = Math.floor(Date.now() / 1000);
+      const secsRemaining = Math.max(60, game.endsAt.toNumber() - now);
+      const iterations = Math.ceil((secsRemaining * 1000) / 100) + 200;
 
-      const iterations = Math.ceil((gameDurationSecs * 1000) / 100) + 100;
+      console.log("[schedule_tick] game.endsAt:", game.endsAt.toNumber(), "now:", now, "secsRemaining:", secsRemaining, "iterations:", iterations);
 
       if (erGameStatus === "active") {
         setStartStatus("Crank already running — skipping.");
       } else {
         setStartStatus("Scheduling crank…");
-        const nonce2 = localStorage.getItem(sessionNonceKey(publicKey)) ?? "0";
-        const sessionKp2 = deriveTempKeypair(publicKey, nonce2);
+        console.log("[schedule_tick] scheduling with", iterations, "iterations @100ms =", (iterations * 100 / 1000).toFixed(0), "seconds");
         const scheduleIx = await (erProgramSigned.methods as any)
           .scheduleTick(game.gameId, {
             taskId: new BN(1),
@@ -521,7 +524,7 @@ export default function GamePage() {
           })
           .accounts({
             magicProgram: MAGIC_PROGRAM_ID,
-            payer: sessionKp2.publicKey,
+            payer: sessionKp.publicKey,
             creator: game.creator,
             game: gamePDA,
             priceFeed: ORACLE_SOL_USD,
@@ -531,8 +534,8 @@ export default function GamePage() {
         const scheduleTx = new Transaction().add(scheduleIx);
         const scheduleBh = await erConn.getLatestBlockhash("confirmed");
         scheduleTx.recentBlockhash = scheduleBh.blockhash;
-        scheduleTx.feePayer = sessionKp2.publicKey;
-        scheduleTx.sign(sessionKp2);
+        scheduleTx.feePayer = sessionKp.publicKey;
+        scheduleTx.sign(sessionKp);
         try {
           const scheduleSig = await erConn.sendRawTransaction(
             scheduleTx.serialize(),
@@ -546,6 +549,7 @@ export default function GamePage() {
             },
             "confirmed"
           );
+          console.log("[schedule_tick] confirmed:", scheduleSig);
           setTxLinks((prev) => [
             ...prev,
             { label: "Crank Scheduled (ER)", sig: scheduleSig },
@@ -571,6 +575,98 @@ export default function GamePage() {
       setStartStatus(null);
     } finally {
       setStarting(false);
+    }
+  };
+
+  const handleCommitAndSettle = async () => {
+    if (!publicKey || !signTransaction || !gamePDA || !game) return;
+    setSettling(true);
+    setSettleError(null);
+    setSettleProgress("Starting settlement…");
+    try {
+      const erConn = getErConnection();
+      // Session keypair for ER (feeless, no popup).
+      // Wallet (publicKey) used for L1 settle so any connected wallet can pay fees.
+      const { sessionKp } = await getSessionIdentity(publicKey, l1Connection);
+      const erSignerKey = sessionKp.publicKey;
+
+      // Check if game is already committed to L1 (owned by Flow program and undelegated)
+      const gameAccountInfo = await l1Connection.getAccountInfo(gamePDA);
+      const alreadyCommitted = !!gameAccountInfo?.owner.equals(PROGRAM_ID) && "ended" in game.status;
+
+      if (!alreadyCommitted) {
+        const erProgram = getProgram(
+          new AnchorProvider(erConn, {} as any, { commitment: "confirmed" })
+        );
+
+        let committedOnL1 = false;
+        try {
+          await (erProgram.account as any).gameState.fetch(gamePDA);
+        } catch {
+          const info = await l1Connection.getAccountInfo(gamePDA);
+          if (info?.owner.equals(PROGRAM_ID)) committedOnL1 = true;
+          else throw new Error("Game account not found on ER or L1");
+        }
+
+        if (!committedOnL1) {
+          const playerRemainingAccounts = game.players.map((p) => ({
+            pubkey: getPlayerPDA(gamePDA, p)[0],
+            isSigner: false,
+            isWritable: true,
+          }));
+          const commitIx = await (erProgram.methods as any)
+            .commitAndSettle()
+            .accounts({ signer: erSignerKey, game: gamePDA, priceFeed: ORACLE_SOL_USD, systemProgram: SystemProgram.programId })
+            .remainingAccounts(playerRemainingAccounts)
+            .instruction();
+
+          const tx = new Transaction().add(commitIx);
+          const { value: { blockhash, lastValidBlockHeight } } = await erConn.getLatestBlockhashAndContext();
+          tx.recentBlockhash = blockhash;
+          tx.feePayer = erSignerKey;
+          tx.sign(sessionKp);
+          const erSig = await erConn.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+
+          setSettleProgress("Confirming on Ephemeral Rollup…");
+          await erConn.confirmTransaction({ blockhash, lastValidBlockHeight, signature: erSig }, "confirmed");
+
+          const txInfo = await erConn.getTransaction(erSig, { maxSupportedTransactionVersion: 0 });
+          if (txInfo?.meta?.err) throw new Error("commitAndSettle failed: " + JSON.stringify(txInfo.meta.err));
+
+          setSettleProgress("Waiting for L1 commitment…");
+          await GetCommitmentSignature(erSig, erConn);
+        }
+      }
+
+      // L1 settle — caller is the connected wallet (any signer OK per contract).
+      // Sign with wallet so fees come from the caller's real account, no session needed.
+      setSettleProgress("Distributing payouts on L1… (approve wallet)");
+      const l1Program = getProgram(
+        new AnchorProvider(l1Connection, {} as any, { commitment: "confirmed" })
+      );
+      const [vaultPDA] = getVaultPDA(gamePDA);
+      const TREASURY = new PublicKey("mtqK4nCocC1A7K13oMxqcRY8DPbqAbVwmg7iCY5NvQU");
+      const settleIx = await (l1Program.methods as any)
+        .settle()
+        .accounts({ game: gamePDA, vault: vaultPDA, caller: publicKey, treasury: TREASURY })
+        .remainingAccounts(game.players.map((w) => ({ pubkey: w, isSigner: false, isWritable: true })))
+        .instruction();
+
+      const settleTx = new Transaction().add(settleIx);
+      const { blockhash: sBh, lastValidBlockHeight: sLvbh } = await l1Connection.getLatestBlockhash("confirmed");
+      settleTx.recentBlockhash = sBh;
+      settleTx.feePayer = publicKey;
+      const signedSettleTx = await signTransaction(settleTx);
+      const sig = await l1Connection.sendRawTransaction(signedSettleTx.serialize(), { skipPreflight: true });
+      await l1Connection.confirmTransaction({ blockhash: sBh, lastValidBlockHeight: sLvbh, signature: sig }, "confirmed");
+
+      setSettleSig(sig);
+      setSettleProgress(null);
+    } catch (e: any) {
+      setSettleError(e?.message ?? "Settlement failed");
+      setSettleProgress(null);
+    } finally {
+      setSettling(false);
     }
   };
 
@@ -745,7 +841,7 @@ export default function GamePage() {
       )}
 
       {/* History panel — shown for ended or settled games (replaces GameBoard) */}
-      {isEnded || isSettled ? (
+      {isEffectivelyEnded || isSettled ? (
         (() => {
           const totalPool = game.totalDeposited.toNumber();
           const scoreNums = game.scores.map((s) => s.toNumber());
@@ -769,10 +865,12 @@ export default function GamePage() {
                     className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded border ${
                       isSettled
                         ? "text-gray-400 border-gray-600"
-                        : "text-red-400 border-red-800"
+                        : isEnded
+                        ? "text-red-400 border-red-800"
+                        : "text-orange-400 border-orange-800"
                     }`}
                   >
-                    {isSettled ? "Settled" : "Ended"}
+                    {isSettled ? "Settled" : isEnded ? "Ended" : "Ending…"}
                   </span>
                   <span
                     className={`text-sm font-bold ${
@@ -869,20 +967,51 @@ export default function GamePage() {
                 })}
               </div>
 
-              {/* Commit & Settle button (ended, any player) */}
-              {isEnded && isPlayer && (
-                <GameBoard game={game} gamePDA={gamePDA} settleOnly />
+              {/* Commit & Settle */}
+              {isEffectivelyEnded && !isSettled && !!publicKey && !settleSig && (
+                <div className="space-y-2">
+                  {settleProgress && (
+                    <div className="flex items-center gap-2 text-blue-400 text-xs">
+                      <span className="animate-pulse">●</span>
+                      {settleProgress}
+                    </div>
+                  )}
+                  {settleError && (
+                    <div className="text-red-400 text-xs bg-red-950/30 border border-red-900 rounded px-2 py-1">
+                      {settleError}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleCommitAndSettle}
+                    disabled={settling}
+                    className="w-full py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-purple-900/50 disabled:text-purple-400 text-white font-bold rounded transition-colors"
+                  >
+                    {settling ? (settleProgress ?? "Settling…") : "Commit & Settle"}
+                  </button>
+                </div>
               )}
 
-              {isSettled && (
-                <div className="text-center text-green-400 text-xs font-bold py-2 border border-green-900 rounded">
-                  Payouts distributed
+              {(settleSig || isSettled) && (
+                <div className="space-y-2">
+                  <div className="text-center text-green-400 text-sm font-bold py-3 border border-green-900/60 rounded bg-green-950/20">
+                    Payouts distributed
+                  </div>
+                  {settleSig && (
+                    <a
+                      href={`https://explorer.solana.com/tx/${settleSig}?cluster=devnet`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block text-blue-400 underline text-xs font-mono text-center"
+                    >
+                      View settle tx ↗
+                    </a>
+                  )}
                 </div>
               )}
             </div>
           );
         })()
-      ) : "active" in game.status ? (
+      ) : (isActive && !timerExpired) || settling ? (
         <GameBoard game={game} gamePDA={gamePDA} />
       ) : null}
     </div>

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { l1Connection } from "@/lib/connections";
+import { l1Connection, getErConnection } from "@/lib/connections";
 import { getProgram, PROGRAM_ID } from "@/lib/anchor";
 import { GameState } from "@/types/game";
 
@@ -12,18 +12,24 @@ interface GameEntry {
   account: GameState;
 }
 
-// Singleton — Program constructor is expensive in Anchor 0.32 (builds all type
+// Singletons — Program constructor is expensive in Anchor 0.32 (builds all type
 // codecs from the full IDL synchronously). Creating it on every poll blocks the
 // main thread long enough to trigger "Page Unresponsive".
-let _program: ReturnType<typeof getProgram> | null = null;
+let _l1Program: ReturnType<typeof getProgram> | null = null;
 function getLobbyProgram() {
-  if (!_program) {
-    const provider = new AnchorProvider(l1Connection, {} as any, {
-      commitment: "confirmed",
-    });
-    _program = getProgram(provider);
+  if (!_l1Program) {
+    const provider = new AnchorProvider(l1Connection, {} as any, { commitment: "confirmed" });
+    _l1Program = getProgram(provider);
   }
-  return _program;
+  return _l1Program;
+}
+let _erProgram: ReturnType<typeof getProgram> | null = null;
+function getErLobbyProgram() {
+  if (!_erProgram) {
+    const provider = new AnchorProvider(getErConnection(), {} as any, { commitment: "confirmed" });
+    _erProgram = getProgram(provider);
+  }
+  return _erProgram;
 }
 
 // 8s gives Helius devnet enough time without making the user wait too long.
@@ -78,16 +84,17 @@ export function GameLobby() {
       }
 
       try {
-        const program = getLobbyProgram();
+        const l1Program = getLobbyProgram();
+        const erProgram = getErLobbyProgram();
+        const erConn = getErConnection();
 
-        // Promise.race with a hard timeout so a hanging getProgramAccounts call
-        // shows an error in 8s instead of freezing the page indefinitely.
-        // Note: the underlying HTTP request is not cancelled (web3.js doesn't
-        // expose an AbortSignal here), but it will eventually timeout on its own.
-        const rawAccounts = await Promise.race([
-          l1Connection.getProgramAccounts(PROGRAM_ID, {
-            filters: [{ dataSize: 487 }],
-          }),
+        // Fetch L1 (waiting/settled) and ER (active/ended delegated) in parallel.
+        // ER games are delegated away from PROGRAM_ID on L1, so only the ER has them.
+        const [l1Raw, erRaw] = await Promise.race([
+          Promise.all([
+            l1Connection.getProgramAccounts(PROGRAM_ID, { filters: [{ dataSize: 487 }] }),
+            erConn.getProgramAccounts(PROGRAM_ID, { filters: [{ dataSize: 487 }] }).catch(() => [] as any[]),
+          ]),
           new Promise<never>((_, reject) =>
             setTimeout(
               () => reject(new Error("RPC timed out — check your connection")),
@@ -96,27 +103,31 @@ export function GameLobby() {
           ),
         ]);
 
-        const all = rawAccounts.map((acc) => ({
-          publicKey: acc.pubkey,
-          account: (program.coder.accounts as any).decode(
-            "gameState",
-            acc.account.data
-          ),
-        }));
+        const decode = (program: ReturnType<typeof getProgram>, raw: readonly any[]) =>
+          raw.map((acc) => ({
+            publicKey: acc.pubkey,
+            account: (program.coder.accounts as any).decode("gameState", acc.account.data) as GameState,
+          }));
+
+        const l1Games = decode(l1Program, l1Raw);
+        const erGames = decode(erProgram, erRaw);
 
         if (cancelled) return;
 
-        const visible = all.filter(
-          (g: any) =>
-            "waiting" in g.account.status ||
-            "active" in g.account.status ||
-            "ended" in g.account.status ||
-            "settled" in g.account.status
-        );
+        // Merge: ER data takes priority (it's live); L1 fills in non-delegated games
+        const merged = new Map<string, { publicKey: PublicKey; account: GameState }>();
+        for (const g of l1Games) merged.set(g.publicKey.toBase58(), g);
+        // ER overrides L1 for active/ended games (more up-to-date)
+        for (const g of erGames) {
+          if ("active" in g.account.status || "ended" in g.account.status) {
+            merged.set(g.publicKey.toBase58(), g);
+          }
+        }
+
         setGames(
-          visible.map((g: any) => ({
+          Array.from(merged.values()).map((g) => ({
             pubkey: g.publicKey,
-            account: g.account as GameState,
+            account: g.account,
           }))
         );
         setError(null);
@@ -218,11 +229,7 @@ export function GameLobby() {
       return (
         <Link href={`/game/${pdaFull}`}>
           <div
-            className={`border rounded p-4 transition-colors cursor-pointer bg-gray-950 ${
-              expired
-                ? "border-gray-900 opacity-50"
-                : "border-gray-800 hover:border-gray-600"
-            }`}
+            className="border border-gray-500 rounded p-4 transition-colors cursor-pointer bg-gray-800 hover:border-gray-300"
           >
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
@@ -292,7 +299,7 @@ export function GameLobby() {
         : null;
     return (
       <Link href={`/game/${pdaFull}`}>
-        <div className="border border-gray-900 rounded p-4 transition-colors cursor-pointer bg-gray-950 hover:border-gray-700 opacity-75 hover:opacity-100">
+        <div className="border border-gray-500 rounded p-4 transition-colors cursor-pointer bg-gray-800 hover:border-gray-300">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className={`text-xs font-bold ${statusColor}`}>

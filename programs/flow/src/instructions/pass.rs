@@ -127,7 +127,7 @@ pub fn calculate_score(price_at_receive: i64, price_now: i64, direction: &Direct
         ((price_now as i128 - price_at_receive as i128) * 1_000_000) / price_at_receive as i128;
 
     match direction {
-        Direction::Long => change_bp as i64,
-        Direction::Short => -change_bp as i64,
+        Direction::Long => change_bp as i64,   // earn on up
+        Direction::Short => -change_bp as i64, // earn on down
     }
 }

@@ -2,6 +2,7 @@ use crate::constants::*;
 use crate::errors::FlowError;
 use crate::instructions::calculate_score;
 use crate::state::*;
+use crate::utils::read_price;
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::commit;
 use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
@@ -35,6 +36,17 @@ pub struct CommitAndSettle<'info> {
 
 pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>) -> Result<()> {
     let game = &mut ctx.accounts.game;
+
+    if game.status == GameStatus::Active {
+        let now = Clock::get()?.unix_timestamp;
+        if now >= game.ends_at {
+            let final_price = read_price(&ctx.accounts.price_feed)?;
+            game.status = GameStatus::Ended;
+            game.final_price = final_price;
+            game.sol_price_now = final_price;
+            msg!("FLOW: Timer expired during commit_and_settle. Game ended.");
+        }
+    }
 
     require!(game.status == GameStatus::Ended, FlowError::GameNotEnded);
 

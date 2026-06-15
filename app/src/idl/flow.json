@@ -1,5 +1,5 @@
 {
-  "address": "4ZAPNxawvTPH41hJ2VhWGwGttPWNXmbqnXFwehTCjyPs",
+  "address": "DqudaX63SvHn6LLe4SERwxNoiLvyLNfjYjgAVcjH9szp",
   "metadata": {
     "name": "flow",
     "version": "0.1.0",
@@ -182,9 +182,9 @@
             "program": {
               "kind": "const",
               "value": [
-                52, 208, 66, 95, 134, 99, 49, 122, 95, 201, 8, 162, 228, 29,
-                137, 199, 243, 158, 184, 244, 51, 6, 223, 234, 53, 235, 3, 101,
-                14, 72, 146, 14
+                190, 211, 161, 177, 243, 199, 38, 210, 150, 41, 193, 231, 157,
+                159, 162, 125, 221, 243, 227, 178, 210, 189, 63, 190, 130, 187,
+                207, 251, 25, 74, 12, 97
               ]
             }
           }
@@ -242,7 +242,7 @@
         },
         {
           "name": "owner_program",
-          "address": "4ZAPNxawvTPH41hJ2VhWGwGttPWNXmbqnXFwehTCjyPs"
+          "address": "DqudaX63SvHn6LLe4SERwxNoiLvyLNfjYjgAVcjH9szp"
         },
         {
           "name": "delegation_program",

@@ -9,12 +9,8 @@ import { l1Connection } from "@/lib/connections"
 import { getProgram } from "@/lib/anchor"
 import { getGamePDA, getVaultPDA, getPlayerPDA } from "@/lib/pdas"
 import {
-  getSessionKeypair,
-  getSessionTokenPDA,
-  getSessionProgramId,
+  getSessionIdentity,
   buildCreateSessionIx,
-  sessionNonceKey,
-  deriveTempKeypair,
 } from "@/lib/session"
 
 interface FormValues {
@@ -67,14 +63,7 @@ export function CreateGameForm() {
       const [vaultPDA] = getVaultPDA(gamePDA)
       const [creatorPlayerPDA] = getPlayerPDA(gamePDA, publicKey)
 
-      // Session keypair — deterministic, same key on every page load
-      const nonce = localStorage.getItem(sessionNonceKey(publicKey)) ?? "0"
-      const sessionKp = deriveTempKeypair(publicKey, nonce)
-
-      // Check if session already exists
-      const sessionProgramId = getSessionProgramId(publicKey, signTransaction as any)
-      const sessionPDA = getSessionTokenPDA(sessionKp, publicKey, sessionProgramId)
-      const existingSession = await l1Connection.getAccountInfo(sessionPDA)
+      const { sessionKp, exists: existingSession } = await getSessionIdentity(publicKey, l1Connection)
 
       // Build create_game ix
       const createGameIx = await (program.methods as any)

@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { PublicKey } from "@solana/web3.js"
 import { AnchorProvider } from "@coral-xyz/anchor"
 import { l1Connection, getErConnection } from "@/lib/connections"
@@ -46,12 +46,15 @@ async function fetchGameFromAny(gamePDA: PublicKey): Promise<GameState | null> {
   return null
 }
 
-export function useGame(gamePDA: PublicKey | null): { game: GameState | null; loading: boolean } {
+export function useGame(gamePDA: PublicKey | null): { game: GameState | null; loading: boolean; refetch: () => void } {
   const [game, setGame] = useState<GameState | null>(null)
   const [loading, setLoading] = useState(false)
+  const [tick, setTick] = useState(0)
+  const hasDataRef = useRef(false)
 
   useEffect(() => {
     if (!gamePDA) return
+    hasDataRef.current = false
     let cancelled = false
 
     async function fetchGame() {
@@ -59,14 +62,17 @@ export function useGame(gamePDA: PublicKey | null): { game: GameState | null; lo
       if (!cancelled) {
         setGame(data)
         setLoading(false)
+        hasDataRef.current = true
       }
     }
 
-    setLoading(true)
+    if (!hasDataRef.current) setLoading(true)
     fetchGame()
     const id = setInterval(fetchGame, 1_000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [gamePDA?.toBase58()])
+  }, [gamePDA?.toBase58(), tick])
 
-  return { game, loading }
+  const refetch = () => setTick(t => t + 1)
+
+  return { game, loading, refetch }
 }

@@ -8,6 +8,7 @@ import { getErConnection } from "@/lib/connections";
 import { getProgram } from "@/lib/anchor";
 import { getPlayerPDA } from "@/lib/pdas";
 import { ORACLE_SOL_USD } from "@/lib/oracle";
+import { SESSION_PROGRAM_ID } from "@/lib/session";
 
 interface Props {
   game: GameState;
@@ -49,12 +50,18 @@ export function PassButton({
   const isActive = "active" in game.status;
 
   const handlePass = useCallback(async () => {
-    if (!selected || !publicKey || !tempKeypair) return;
+    if (!selected || !publicKey || !tempKeypair || !sessionTokenPDA) return;
     setLoading(true);
     setError(null);
     try {
       const erConnection = getErConnection();
       const nextPlayer = new PublicKey(selected);
+      const sessionInfo = await erConnection.getAccountInfo(sessionTokenPDA);
+      if (!sessionInfo?.owner.equals(SESSION_PROGRAM_ID)) {
+        throw new Error(
+          "Session key is missing or stale on ER. Renew the session, wait a few seconds, then pass again."
+        );
+      }
       const provider = new AnchorProvider(
         erConnection,
         {
@@ -76,7 +83,7 @@ export function PassButton({
         signer: tempKeypair.publicKey,
         priceFeed: ORACLE_SOL_USD,
       };
-      if (sessionTokenPDA) accounts.sessionToken = sessionTokenPDA;
+      accounts.sessionToken = sessionTokenPDA;
 
       const tx = await (program.methods as any)
         .pass()
@@ -132,7 +139,21 @@ export function PassButton({
     onPass,
   ]);
 
-  if (!isActive || !isMyTurn) return null;
+  if (!isActive) return null;
+
+  if (!isMyTurn) {
+    return (
+      <div className="space-y-3">
+        <div className="text-xs text-gray-500 uppercase tracking-wider">Pass Potato To</div>
+        <button
+          disabled
+          className="w-full py-3 bg-gray-800 text-gray-600 font-bold rounded cursor-not-allowed"
+        >
+          Waiting for {game.currentHolder.toBase58().slice(0, 4)}…{game.currentHolder.toBase58().slice(-4)} to pass
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -154,10 +175,13 @@ export function PassButton({
           </button>
         ))}
       </div>
+      {!sessionTokenPDA && (
+        <div className="text-amber-400 text-xs">Create or renew your session before passing.</div>
+      )}
       {error && <div className="text-red-400 text-xs">{error}</div>}
       <button
         onClick={handlePass}
-        disabled={!selected || loading}
+        disabled={!selected || !sessionTokenPDA || loading}
         className="w-full py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-600 text-white font-bold rounded transition-colors"
       >
         {loading ? "Passing..." : "PASS 🥔"}
