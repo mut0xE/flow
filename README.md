@@ -65,7 +65,13 @@ Ephemeral Rollup  (devnet.magicblock.app)
   commit_and_settle — commits final state, undelegates PDAs back to L1
 ```
 
-Session keys (session-keys 3.1.1) allow all ER instructions to run without a wallet popup. Each player bundles session key creation into their `create_game` or `join_game` transaction — one popup per player, valid for 30 days.
+The core gameplay loop runs entirely on [MagicBlock's Ephemeral Rollup](https://docs.magicblock.gg/pages/overview/products) — a high-speed execution layer that commits back to Solana L1. Once game accounts are delegated to the ER:
+
+- `tick_price` runs as an automated crank every 100ms, pulling a fresh Pyth SOL/USD price, checking the loss limit, and ending the game at expiry — all without any user interaction.
+- `pass` executes silently via session keys on the ER, calculating score in basis points and transferring the position instantly — no wallet popup, no L1 latency.
+- `start_game` reads Pyth price and activates the game on the ER in milliseconds.
+
+Session keys (session-keys 3.1.1) allow all ER instructions to run without a wallet popup. Each player bundles session key creation into their `create_game` or `join_game` transaction.
 
 ---
 
