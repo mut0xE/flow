@@ -987,7 +987,7 @@ export default function GamePage() {
                     disabled={settling}
                     className="w-full py-3 bg-purple-700 hover:bg-purple-600 disabled:bg-purple-900/50 disabled:text-purple-400 text-white font-bold rounded transition-colors"
                   >
-                    {settling ? (settleProgress ?? "Settling…") : "Commit & Settle"}
+                    {settling ? "Settling…" : "Commit & Settle"}
                   </button>
                 </div>
               )}
