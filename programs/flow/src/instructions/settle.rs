@@ -2,26 +2,22 @@ use crate::constants::*;
 use crate::errors::FlowError;
 use crate::state::*;
 use anchor_lang::prelude::*;
+use ephemeral_rollups_sdk::anchor::action;
 
-// called on L1 after commit_and_settle lands; distributes vault by score
+#[action]
 #[derive(Accounts)]
 pub struct Settle<'info> {
+    /// CHECK: was delegated — PDA and data verified manually in handler
     #[account(mut)]
-    pub caller: Signer<'info>,
+    pub game: UncheckedAccount<'info>,
 
-    #[account(
-        mut,
-        seeds = [GAME_SEED, game.game_id.to_le_bytes().as_ref(), game.creator.as_ref()],
-        bump  = game.bump,
-    )]
-    pub game: Account<'info, GameState>,
-
+    ///CHECK: vault was never delegated — safe to constrain normally
     #[account(
         mut,
         seeds = [VAULT_SEED, game.key().as_ref()],
-        bump  = game.vault_bump,
+        bump,
     )]
-    pub vault: SystemAccount<'info>,
+    pub vault: UncheckedAccount<'info>,
 
     /// CHECK: dust recipient
     #[account(mut, address = TREASURY @ FlowError::InvalidTreasury)]
@@ -31,9 +27,29 @@ pub struct Settle<'info> {
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Settle<'info>>) -> Result<()> {
-    let game = &mut ctx.accounts.game;
+    let game_info = &mut ctx.accounts.game.to_account_info();
+    let mut data: &[u8] = &game_info.try_borrow_data()?;
+    let mut game = GameState::try_deserialize(&mut data)?;
 
-    require!(game.status == GameStatus::Ended, FlowError::GameNotEnded);
+    let (expected_pda, _) = Pubkey::find_program_address(
+        &[
+            GAME_SEED,
+            game.game_id.to_le_bytes().as_ref(),
+            game.creator.as_ref(),
+        ],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        expected_pda,
+        ctx.accounts.game.key(),
+        FlowError::InvalidPlayer
+    );
+
+    require!(ctx.accounts.vault.lamports() > 0, FlowError::AlreadySettled);
+    require!(
+        game.status == GameStatus::Ended || game.status == GameStatus::Settled,
+        FlowError::GameNotEnded
+    );
 
     let player_count = game.player_count as usize;
     require!(
@@ -45,8 +61,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Settle<'info>>) -> Resu
         game.players.len() == player_count,
         FlowError::InvalidPlayerCount
     );
+
     require!(
-        ctx.remaining_accounts.len() == player_count,
+        ctx.remaining_accounts.len() >= player_count,
         FlowError::InvalidPlayerCount
     );
 
@@ -55,12 +72,6 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Settle<'info>>) -> Resu
             ctx.remaining_accounts[i].key(),
             game.players[i],
             FlowError::InvalidPlayer
-        );
-        msg!(
-            "player[{}] wallet={} score={}",
-            i,
-            ctx.remaining_accounts[i].key(),
-            game.scores[i]
         );
     }
 
@@ -95,7 +106,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Settle<'info>>) -> Resu
     };
 
     let total_pool = game.total_deposited;
-    let game_key = game.key();
+    let game_key = ctx.accounts.game.key();
     let vault_bump = game.vault_bump;
     let vault_seeds: &[&[u8]] = &[VAULT_SEED, game_key.as_ref(), &[vault_bump]];
 
@@ -153,10 +164,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Settle<'info>>) -> Resu
             ),
             dust,
         )?;
-        msg!("FLOW: dust {} → treasury", dust);
     }
 
     game.status = GameStatus::Settled;
+
+    if ctx.accounts.game.owner == &crate::ID {
+        game.try_serialize(&mut &mut ctx.accounts.game.try_borrow_mut_data()?[..])?;
+    }
 
     msg!(
         "FLOW: settle complete total_paid={} dust={}",

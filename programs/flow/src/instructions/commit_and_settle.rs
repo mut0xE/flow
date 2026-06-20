@@ -5,7 +5,9 @@ use crate::state::*;
 use crate::utils::read_price;
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::commit;
-use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
+use ephemeral_rollups_sdk::cpi::DELEGATION_PROGRAM_ID;
+use ephemeral_rollups_sdk::ephem::{CallHandler, FoldableIntentBuilder, MagicIntentBundleBuilder};
+use ephemeral_rollups_sdk::{ActionArgs, ShortAccountMeta};
 
 impl TryFrom<&AccountInfo<'_>> for PlayerAccount {
     type Error = Error;
@@ -19,6 +21,7 @@ impl TryFrom<&AccountInfo<'_>> for PlayerAccount {
 #[commit]
 #[derive(Accounts)]
 pub struct CommitAndSettle<'info> {
+    #[account(mut)]
     pub signer: Signer<'info>,
 
     #[account(
@@ -30,8 +33,6 @@ pub struct CommitAndSettle<'info> {
 
     /// CHECK: Pyth price feed
     pub price_feed: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>) -> Result<()> {
@@ -129,12 +130,79 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>
         game.scores[holder_idx]
     );
 
+    game.status = GameStatus::Settled;
+
     let mut accounts_to_commit = vec![ctx.accounts.game.to_account_info()];
+
     for acc in ctx.remaining_accounts.iter() {
         accounts_to_commit.push(acc.clone());
     }
 
     ctx.accounts.game.exit(&crate::ID)?;
+
+    let instruction_data = anchor_lang::InstructionData::data(&crate::instruction::Settle {});
+    let action_args = ActionArgs::new(instruction_data);
+
+    let vault_key =
+        Pubkey::find_program_address(&[VAULT_SEED, ctx.accounts.game.key().as_ref()], &crate::ID).0;
+
+    msg!(
+        "COMMIT: building settle action — game={} vault={} treasury={}",
+        ctx.accounts.game.key(),
+        vault_key,
+        TREASURY
+    );
+
+    let escrow_authority_key = ctx.accounts.signer.key();
+    let escrow_pda = Pubkey::find_program_address(
+        &[b"balance", escrow_authority_key.as_ref(), &[255u8]],
+        &DELEGATION_PROGRAM_ID,
+    )
+    .0;
+
+    let mut action_accounts = vec![
+        ShortAccountMeta {
+            pubkey: ctx.accounts.game.key().to_bytes().into(),
+            is_writable: true,
+        }, // [0] game → Settle.game
+        ShortAccountMeta {
+            pubkey: vault_key.to_bytes().into(),
+            is_writable: true,
+        }, // [1] vault → Settle.vault
+        ShortAccountMeta {
+            pubkey: TREASURY.to_bytes().into(),
+            is_writable: true,
+        }, // [2] treasury → Settle.treasury
+        ShortAccountMeta {
+            pubkey: anchor_lang::system_program::ID.to_bytes().into(),
+            is_writable: false,
+        }, // [3] system_program → Settle.system_program
+        ShortAccountMeta {
+            pubkey: escrow_authority_key.to_bytes().into(),
+            is_writable: true,
+        }, // [4] escrow_auth → Settle.escrow_auth (auto-added by #[action] macro)
+        ShortAccountMeta {
+            pubkey: escrow_pda.to_bytes().into(),
+            is_writable: true,
+        }, // [5] escrow → Settle.escrow (auto-added by #[action] macro)
+    ];
+
+    // Player wallets → Settle.remaining_accounts[0..player_count-1].
+    for (i, wallet) in ctx.accounts.game.players.iter().enumerate() {
+        msg!("COMMIT: settle remaining_accounts[{}]={}", i, wallet);
+        action_accounts.push(ShortAccountMeta {
+            pubkey: wallet.to_bytes().into(),
+            is_writable: true,
+        });
+    }
+
+    let settle_action = CallHandler {
+        destination_program: crate::ID,
+        accounts: action_accounts,
+        args: action_args,
+        escrow_authority: ctx.accounts.signer.to_account_info(),
+        compute_units: 200_000,
+    };
 
     MagicIntentBundleBuilder::new(
         ctx.accounts.signer.to_account_info(),
@@ -142,6 +210,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, CommitAndSettle<'info>>
         ctx.accounts.magic_program.to_account_info(),
     )
     .commit_and_undelegate(&accounts_to_commit)
+    .add_post_commit_actions([settle_action])
     .build_and_invoke()?;
 
     msg!("FLOW: Game + PlayerPDAs committed to L1. Call settle() on L1 to distribute vault.");

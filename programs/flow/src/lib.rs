@@ -4,7 +4,7 @@ mod errors;
 mod instructions;
 mod state;
 mod utils;
-declare_id!("DqudaX63SvHn6LLe4SERwxNoiLvyLNfjYjgAVcjH9szp");
+declare_id!("FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR");
 
 use ephemeral_rollups_sdk::anchor::ephemeral;
 use instructions::*;

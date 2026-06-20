@@ -22,7 +22,7 @@ custom-panic = []
 
 [dependencies]
 anchor-lang = "0.32.1"
-ephemeral-rollups-sdk = { version = "0.8.8", features = ["anchor"] }
+ephemeral-rollups-sdk = { version = "0.13.0", features = ["anchor"] }
 magicblock-magic-program-api = "0.8.8"
 pyth-solana-receiver-sdk = "1.2.0"
 session-keys = { version = "3.1.1", features = ["no-entrypoint"] }
