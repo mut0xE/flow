@@ -102,7 +102,7 @@ import {
 } from "../pdas";
 
 export const FLOW_PROGRAM_ADDRESS =
-  "B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k" as Address<"B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k">;
+  "FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR" as Address<"FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR">;
 
 export enum FlowAccount {
   GameState,
@@ -299,7 +299,7 @@ export function identifyFlowInstruction(
 }
 
 export type ParsedFlowInstruction<
-  TProgram extends string = "B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k",
+  TProgram extends string = "FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR",
 > =
   | ({
       instructionType: FlowInstruction.CancelGame;

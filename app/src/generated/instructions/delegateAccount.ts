@@ -68,7 +68,7 @@ export type DelegateAccountInstruction<
   TAccountPda extends string | AccountMeta<string> = string,
   TAccountValidator extends string | AccountMeta<string> = string,
   TAccountOwnerProgram extends string | AccountMeta<string> =
-    "B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k",
+    "FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR",
   TAccountDelegationProgram extends string | AccountMeta<string> =
     "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh",
   TAccountSystemProgram extends string | AccountMeta<string> =
@@ -281,7 +281,7 @@ export async function getDelegateAccountInstructionAsync<
   }
   if (!accounts.ownerProgram.value) {
     accounts.ownerProgram.value =
-      "B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k" as Address<"B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k">;
+      "FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR" as Address<"FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR">;
   }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
@@ -417,7 +417,7 @@ export function getDelegateAccountInstruction<
   }
   if (!accounts.ownerProgram.value) {
     accounts.ownerProgram.value =
-      "B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k" as Address<"B7uXZESUircJ6US2VFZTHqyPprEgtUH3KD5nw7KKPb5k">;
+      "FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR" as Address<"FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR">;
   }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =

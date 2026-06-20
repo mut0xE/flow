@@ -87,7 +87,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
 
             {/* Footer */}
-            <div style={{ textAlign: "center", marginTop: 18 }}>
+            <div style={{ textAlign: "center", marginTop: 18, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
               <a
                 href="https://magicblock.gg"
                 target="_blank"
@@ -105,6 +105,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 }}
               >
                 ⚡ BUILT WITH MAGICBLOCK
+              </a>
+              <a
+                href="https://explorer.solana.com/address/FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR?cluster=devnet"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontFamily: "'VT323', monospace",
+                  fontSize: 13,
+                  letterSpacing: 1,
+                  color: "var(--text-muted)",
+                  textDecoration: "none",
+                  opacity: 0.5,
+                }}
+              >
+                PROGRAM: FLow6TWE…vNJR
               </a>
             </div>
 
