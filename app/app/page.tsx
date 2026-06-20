@@ -1,23 +1,35 @@
-import Link from "next/link"
-import { GameLobby } from "@/components/game/GameLobby"
+import Link from "next/link";
+import { GameLobby } from "@/components/game/GameLobby";
 
 export default function HomePage() {
   return (
-    <div className="space-y-8">
-      <div className="space-y-2">
-        <h1 className="text-2xl font-bold text-green-400 tracking-widest">FLOW</h1>
-        <p className="text-gray-400 text-sm">Pass the live SOL position before it reverses. Earn yield from real price movement.</p>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm text-gray-500 uppercase tracking-wider">Games</h2>
-        <Link href="/create"
-          className="px-4 py-2 bg-green-800 hover:bg-green-700 text-white text-sm rounded transition-colors font-bold">
-          + Create Game
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <span style={{
+          fontFamily: "'VT323', monospace",
+          fontSize: 18,
+          color: "var(--text-purple)",
+          letterSpacing: 0.5,
+        }}>
+          OPEN GAMES
+        </span>
+        <Link href="/create" style={{
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 11,
+          border: "3px solid var(--navy)",
+          background: "var(--yellow)",
+          color: "var(--navy)",
+          boxShadow: "4px 4px 0 var(--navy)",
+          padding: "12px 16px",
+          cursor: "pointer",
+          letterSpacing: 1,
+          textDecoration: "none",
+          display: "inline-block",
+        }}>
+          + HOST GAME
         </Link>
       </div>
-
       <GameLobby />
     </div>
-  )
+  );
 }

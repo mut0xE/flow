@@ -1,49 +1,37 @@
 "use client";
 import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
-import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { type Address } from "@solana/kit";
 import { l1Connection, getErConnection } from "@/lib/connections";
-import { getProgram, PROGRAM_ID } from "@/lib/anchor";
+import { FLOW_PROGRAM_ADDRESS } from "@/generated/programs/flow";
+
+const PROGRAM_ID = new PublicKey(FLOW_PROGRAM_ADDRESS);
+import { decodeGameState } from "@/generated/accounts/gameState";
 import { GameState } from "@/types/game";
+import { GameStatus } from "@/generated/types/gameStatus";
+import { Direction } from "@/generated/types/direction";
 
 interface GameEntry {
   pubkey: PublicKey;
   account: GameState;
 }
 
-// Singletons — Program constructor is expensive in Anchor 0.32 (builds all type
-// codecs from the full IDL synchronously). Creating it on every poll blocks the
-// main thread long enough to trigger "Page Unresponsive".
-let _l1Program: ReturnType<typeof getProgram> | null = null;
-function getLobbyProgram() {
-  if (!_l1Program) {
-    const provider = new AnchorProvider(l1Connection, {} as any, { commitment: "confirmed" });
-    _l1Program = getProgram(provider);
-  }
-  return _l1Program;
-}
-let _erProgram: ReturnType<typeof getProgram> | null = null;
-function getErLobbyProgram() {
-  if (!_erProgram) {
-    const provider = new AnchorProvider(getErConnection(), {} as any, { commitment: "confirmed" });
-    _erProgram = getProgram(provider);
-  }
-  return _erProgram;
+function decodeRaw(raw: { pubkey: PublicKey; account: { data: Buffer } }): { publicKey: PublicKey; account: GameState } | null {
+  try {
+    const encoded = { address: raw.pubkey.toBase58() as Address, data: raw.account.data as unknown as Uint8Array };
+    const decoded = decodeGameState(encoded as any);
+    return { publicKey: raw.pubkey, account: decoded.data };
+  } catch { return null; }
 }
 
-// 8s gives Helius devnet enough time without making the user wait too long.
-const FETCH_TIMEOUT_MS = 8_000;
-// Poll every 15s — frequent enough to surface new games, cheap on RPC credits.
+const FETCH_TIMEOUT_MS = 4_000;
 const POLL_INTERVAL_MS = 15_000;
 
 function useNow(intervalMs: number) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   useEffect(() => {
-    const id = setInterval(
-      () => setNow(Math.floor(Date.now() / 1000)),
-      intervalMs
-    );
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), intervalMs);
     return () => clearInterval(id);
   }, [intervalMs]);
   return now;
@@ -57,13 +45,30 @@ function timeRemaining(endsAt: number, now: number): string {
   return `${m}m ${s < 10 ? "0" : ""}${s}s`;
 }
 
+const cardStyle: React.CSSProperties = {
+  position: "relative",
+  border: "3px solid var(--navy)",
+  boxShadow: "5px 5px 0 var(--navy)",
+  background: "var(--lavender)",
+  padding: "16px 17px",
+};
+
+const dirBadge = (dir: "LONG" | "SHORT"): React.CSSProperties => ({
+  fontFamily: "'Press Start 2P', monospace",
+  fontSize: 10,
+  border: "3px solid var(--navy)",
+  padding: "6px 8px",
+  background: "var(--navy)",
+  color: dir === "LONG" ? "#8fe3a8" : "#ff9fb0",
+  display: "inline-block",
+});
+
 export function GameLobby() {
   const [games, setGames] = useState<GameEntry[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
-  const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<"open" | "history">("open");
   const now = useNow(1_000);
   const hasData = useRef(false);
@@ -71,217 +76,144 @@ export function GameLobby() {
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
-
     async function fetchGames() {
       if (inFlight) return;
       inFlight = true;
-      if (!hasData.current) {
-        // First load — show spinner instead of stale list
-        setInitialLoading(true);
-      } else {
-        // Subsequent polls — show subtle indicator, keep current list visible
-        setRefreshing(true);
-      }
-
+      if (!hasData.current) setInitialLoading(true);
+      else setRefreshing(true);
       try {
-        const l1Program = getLobbyProgram();
-        const erProgram = getErLobbyProgram();
         const erConn = getErConnection();
-
-        // Fetch L1 (waiting/settled) and ER (active/ended delegated) in parallel.
-        // ER games are delegated away from PROGRAM_ID on L1, so only the ER has them.
         const [l1Raw, erRaw] = await Promise.race([
           Promise.all([
             l1Connection.getProgramAccounts(PROGRAM_ID, { filters: [{ dataSize: 487 }] }),
             erConn.getProgramAccounts(PROGRAM_ID, { filters: [{ dataSize: 487 }] }).catch(() => [] as any[]),
           ]),
           new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error("RPC timed out — check your connection")),
-              FETCH_TIMEOUT_MS
-            )
+            setTimeout(() => reject(new Error("RPC timed out — check your connection")), FETCH_TIMEOUT_MS)
           ),
         ]);
-
-        const decode = (program: ReturnType<typeof getProgram>, raw: readonly any[]) =>
-          raw.map((acc) => ({
-            publicKey: acc.pubkey,
-            account: (program.coder.accounts as any).decode("gameState", acc.account.data) as GameState,
-          }));
-
-        const l1Games = decode(l1Program, l1Raw);
-        const erGames = decode(erProgram, erRaw);
-
-        if (cancelled) return;
-
-        // Merge: ER data takes priority (it's live); L1 fills in non-delegated games
+        const decode = (raw: readonly any[]) =>
+          raw.flatMap((acc) => { const r = decodeRaw(acc); return r ? [r] : []; });
         const merged = new Map<string, { publicKey: PublicKey; account: GameState }>();
-        for (const g of l1Games) merged.set(g.publicKey.toBase58(), g);
-        // ER overrides L1 for active/ended games (more up-to-date)
-        for (const g of erGames) {
-          if ("active" in g.account.status || "ended" in g.account.status) {
+        for (const g of decode(l1Raw)) merged.set(g.publicKey.toBase58(), g);
+        for (const g of decode(erRaw)) {
+          if (g.account.status === GameStatus.Active || g.account.status === GameStatus.Ended)
             merged.set(g.publicKey.toBase58(), g);
-          }
         }
-
-        setGames(
-          Array.from(merged.values()).map((g) => ({
-            pubkey: g.publicKey,
-            account: g.account,
-          }))
-        );
+        if (cancelled) return;
+        setGames(Array.from(merged.values()).map((g) => ({ pubkey: g.publicKey, account: g.account })));
         setError(null);
         hasData.current = true;
       } catch (e: any) {
         if (!cancelled) setError(e?.message ?? "Failed to load games");
       } finally {
         inFlight = false;
-        if (!cancelled) {
-          setInitialLoading(false);
-          setRefreshing(false);
-        }
+        if (!cancelled) { setInitialLoading(false); setRefreshing(false); }
       }
     }
-
     fetchGames();
     const id = setInterval(fetchGames, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; clearInterval(id); };
   }, [retryKey]);
 
   const [copiedPDA, setCopiedPDA] = useState<string | null>(null);
   const copyPDA = useCallback((e: React.MouseEvent, addr: string) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     navigator.clipboard.writeText(addr).then(() => {
-      setCopiedPDA(addr);
-      setTimeout(() => setCopiedPDA(null), 1500);
+      setCopiedPDA(addr); setTimeout(() => setCopiedPDA(null), 1500);
     });
   }, []);
 
-  // ── First load spinner ──────────────────────────────────────────────────────
   if (initialLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-500 text-sm">
-        <span className="animate-spin inline-block w-3 h-3 border border-gray-600 border-t-gray-300 rounded-full" />
-        Loading games…
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "40px 0" }}>
+        <span style={{ display: "flex", gap: 5 }}>
+          {[0, 1, 2].map((i) => (
+            <span key={i} style={{ width: 12, height: 12, background: "var(--text-purple)", display: "inline-block", animation: `blink 1s steps(1) infinite ${i * 0.33}s` }} />
+          ))}
+        </span>
+        <span style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 10, color: "var(--navy)" }}>LOADING</span>
+        <span style={{ fontFamily: "'VT323', monospace", fontSize: 15, color: "var(--text-muted)" }}>connecting to rollup…</span>
       </div>
     );
   }
 
-  // Derive filtered sets — search matches against full PDA string (case-insensitive)
-  const searchLower = search.trim().toLowerCase();
-  const allOpen = games.filter(
-    ({ account }) => "waiting" in account.status || "active" in account.status
-  );
-  const allPast = games.filter(
-    ({ account }) => "ended" in account.status || "settled" in account.status
-  );
+  const allOpen = games.filter(({ account }) => account.status === GameStatus.Waiting || account.status === GameStatus.Active);
+  const allPast = games.filter(({ account }) => account.status === GameStatus.Ended || account.status === GameStatus.Settled);
+  const showOpen = activeTab === "open";
+  const showHistory = activeTab === "history";
 
-  // When searching: ignore active tab and show matching results from both groups.
-  // When not searching: respect the active tab.
-  const matchesPDA = (pubkey: PublicKey) =>
-    !searchLower || pubkey.toBase58().toLowerCase().includes(searchLower);
-
-  const openGames = allOpen.filter(({ pubkey }) => matchesPDA(pubkey));
-  const pastGames = allPast.filter(({ pubkey }) => matchesPDA(pubkey));
-
-  // Auto-switch tab hint when search has results only in the other tab
-  const searchHasOpenOnly =
-    searchLower && openGames.length > 0 && pastGames.length === 0;
-  const searchHasPastOnly =
-    searchLower && pastGames.length > 0 && openGames.length === 0;
-
-  const showOpen = searchLower ? openGames.length > 0 : activeTab === "open";
-  const showHistory = searchLower
-    ? pastGames.length > 0
-    : activeTab === "history";
-
-  function GameCard({
-    pubkey,
-    account,
-    variant,
-  }: {
-    pubkey: PublicKey;
-    account: GameState;
-    variant: "open" | "history";
-  }) {
-    const dir = "long" in account.direction ? "LONG" : "SHORT";
-    const dirColor = dir === "LONG" ? "text-green-400" : "text-red-400";
-    const feeSol = account.entryFee.toNumber() / LAMPORTS_PER_SOL;
-    const creatorShort = `${account.creator
-      .toBase58()
-      .slice(0, 4)}…${account.creator.toBase58().slice(-4)}`;
+  function GameCard({ pubkey, account, variant }: { pubkey: PublicKey; account: GameState; variant: "open" | "history" }) {
+    const dir = account.direction === Direction.Long ? "LONG" : "SHORT";
+    const feeSol = Number(account.entryFee) / LAMPORTS_PER_SOL;
     const pdaFull = pubkey.toBase58();
     const pdaShort = `${pdaFull.slice(0, 8)}…${pdaFull.slice(-8)}`;
     const isCopied = copiedPDA === pdaFull;
 
     if (variant === "open") {
-      const isWaiting = "waiting" in account.status;
-      const countdown = timeRemaining(account.endsAt.toNumber(), now);
+      const isWaiting = account.status === GameStatus.Waiting;
+      const countdown = timeRemaining(Number(account.endsAt), now);
       const expired = countdown === "Expired";
       const canJoin = isWaiting && !expired && account.playerCount < account.maxPlayers;
       const statusLabel = expired ? "EXPIRED" : isWaiting ? "WAITING" : "ACTIVE";
-      const statusColor = expired ? "text-gray-500" : isWaiting ? "text-yellow-400" : "text-green-400";
+      const statusColor = expired ? "var(--text-muted)" : isWaiting ? "var(--yellow)" : "var(--green)";
       return (
-        <Link href={`/game/${pdaFull}`}>
-          <div
-            className={`border rounded p-4 transition-colors cursor-pointer ${expired ? "border-gray-700 bg-gray-900 opacity-60" : "border-gray-500 bg-gray-800 hover:border-gray-300"}`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className={`text-xs font-bold ${statusColor}`}>
-                  {statusLabel}
-                </span>
-                <span className={`text-sm font-bold ${dirColor}`}>{dir}</span>
-                {canJoin && (
-                  <span className="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded font-bold">
-                    JOIN
-                  </span>
-                )}
+        <Link href={`/game/${pdaFull}`} style={{ textDecoration: "none" }}>
+          <div style={{ ...cardStyle, opacity: expired ? 0.7 : 1 }}>
+            {expired && (
+              <div style={{
+                position: "absolute", inset: 0, zIndex: 10,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                pointerEvents: "none",
+              }}>
+                <div style={{
+                  fontFamily: "'Press Start 2P', monospace", fontSize: 18,
+                  color: "#fff", background: "#e8334a",
+                  border: "3px solid #0a0e23", padding: "8px 18px",
+                  transform: "rotate(-12deg)",
+                  boxShadow: "3px 3px 0 #0a0e23",
+                  letterSpacing: 2,
+                  userSelect: "none",
+                }}>
+                  EXPIRED
+                </div>
               </div>
-              <span
-                className={`text-xs font-mono ${
-                  expired ? "text-gray-700" : "text-gray-500"
-                }`}
-              >
-                {countdown}
-              </span>
+            )}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
+              <span style={{ ...dirBadge(dir as "LONG" | "SHORT") }}>{dir === "LONG" ? "▲" : "▼"} {dir}</span>
+              <span style={{ fontFamily: "'VT323', monospace", fontSize: 17, color: "var(--text-muted)", letterSpacing: 0.5 }}>⏱ {countdown}</span>
             </div>
-            <div className="flex items-center justify-between text-sm mb-1">
-              <span className="text-gray-300 font-mono">
-                {feeSol} SOL entry
-              </span>
-              <span
-                className={`text-gray-400 ${canJoin ? "text-blue-400" : ""}`}
-              >
-                {account.playerCount}/{account.maxPlayers} players
-                {canJoin &&
-                  ` — ${account.maxPlayers - account.playerCount} slot${
-                    account.maxPlayers - account.playerCount > 1 ? "s" : ""
-                  } open`}
-              </span>
+            <div style={{ display: "flex", gap: 16, marginBottom: 14 }}>
+              <div>
+                <div style={{ fontFamily: "'VT323', monospace", fontSize: 14, color: "var(--text-muted)", letterSpacing: 0.5 }}>STATUS</div>
+                <div style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 10, marginTop: 5, color: statusColor }}>{statusLabel}</div>
+              </div>
+              <div>
+                <div style={{ fontFamily: "'VT323', monospace", fontSize: 14, color: "var(--text-muted)", letterSpacing: 0.5 }}>ENTRY</div>
+                <div style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 10, marginTop: 5, color: "var(--navy)" }}>{feeSol} ◎</div>
+              </div>
+              <div>
+                <div style={{ fontFamily: "'VT323', monospace", fontSize: 14, color: "var(--text-muted)", letterSpacing: 0.5 }}>PLAYERS</div>
+                <div style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 10, marginTop: 5, color: "var(--navy)" }}>{account.playerCount}/{account.maxPlayers}</div>
+              </div>
             </div>
-            <div className="flex items-center justify-between mt-2">
-              <span className="text-xs text-gray-600 font-mono">
-                creator: {creatorShort}
-              </span>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <button
+                style={{
+                  fontFamily: "'Press Start 2P', monospace", fontSize: 10,
+                  border: "3px solid var(--navy)",
+                  background: canJoin ? "var(--navy)" : "var(--lavender)",
+                  color: canJoin ? "var(--yellow)" : "var(--text-muted)",
+                  boxShadow: "4px 4px 0 var(--navy)", padding: "10px 14px", cursor: canJoin ? "pointer" : "default", letterSpacing: 1,
+                }}
+              >
+                {canJoin ? "JOIN ▶" : isWaiting ? "WAITING" : "VIEW ▶"}
+              </button>
               <button
                 onClick={(e) => copyPDA(e, pdaFull)}
-                className="flex items-center gap-1 text-xs font-mono text-gray-700 hover:text-gray-400 transition-colors"
-                title="Copy game PDA"
+                style={{ fontFamily: "'VT323', monospace", fontSize: 14, color: "var(--text-muted)", background: "transparent", border: "none", cursor: "pointer" }}
               >
-                {isCopied ? (
-                  <span className="text-green-500">✓ copied</span>
-                ) : (
-                  <>
-                    <span>{pdaShort}</span>
-                    <span className="ml-1 opacity-60">⎘</span>
-                  </>
-                )}
+                {isCopied ? "✓ copied" : pdaShort + " ⎘"}
               </button>
             </div>
           </div>
@@ -289,196 +221,111 @@ export function GameLobby() {
       );
     }
 
-    // history variant
-    const isSettled = "settled" in account.status;
+    const isSettled = account.status === GameStatus.Settled;
     const statusLabel = isSettled ? "SETTLED" : "ENDED";
-    const statusColor = isSettled ? "text-gray-400" : "text-red-400";
-    const finalPriceSol =
-      account.finalPrice.toNumber() > 0
-        ? `$${(account.finalPrice.toNumber() * 1e-8).toFixed(2)}`
-        : null;
+    const stampColor = isSettled ? "#4caf82" : "#e8334a";
+    const finalPriceSol = Number(account.finalPrice) > 0 ? `$${(Number(account.finalPrice) * 1e-8).toFixed(2)}` : null;
     return (
-      <Link href={`/game/${pdaFull}`}>
-        <div className="border border-gray-500 rounded p-4 transition-colors cursor-pointer bg-gray-800 hover:border-gray-300">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <span className={`text-xs font-bold ${statusColor}`}>
-                {statusLabel}
-              </span>
-              <span className={`text-sm font-bold ${dirColor}`}>{dir}</span>
+      <Link href={`/game/${pdaFull}`} style={{ textDecoration: "none" }}>
+        <div style={{ ...cardStyle, opacity: 0.85 }}>
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 10,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            pointerEvents: "none",
+          }}>
+            <div style={{
+              fontFamily: "'Press Start 2P', monospace", fontSize: 16,
+              color: "#fff", background: stampColor,
+              border: "3px solid #0a0e23", padding: "8px 18px",
+              transform: "rotate(-12deg)",
+              boxShadow: "3px 3px 0 #0a0e23",
+              letterSpacing: 2, userSelect: "none",
+            }}>
+              {statusLabel}
             </div>
-            {finalPriceSol && (
-              <span className="text-xs font-mono text-gray-500">
-                final {finalPriceSol}
-              </span>
-            )}
           </div>
-          <div className="flex items-center justify-between text-sm mb-1">
-            <span className="text-gray-500 font-mono">{feeSol} SOL entry</span>
-            <span className="text-gray-600">{account.playerCount} players</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ ...dirBadge(dir as "LONG" | "SHORT") }}>{dir === "LONG" ? "▲" : "▼"} {dir}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 9, color: isSettled ? "var(--text-muted)" : "var(--red)" }}>{statusLabel}</span>
+              {finalPriceSol && <span style={{ fontFamily: "'VT323', monospace", fontSize: 15, color: "var(--text-muted)" }}>final {finalPriceSol}</span>}
+            </div>
           </div>
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-xs text-gray-700 font-mono">
-              creator: {creatorShort}
-            </span>
-            <button
-              onClick={(e) => copyPDA(e, pdaFull)}
-              className="flex items-center gap-1 text-xs font-mono text-gray-700 hover:text-gray-400 transition-colors"
-              title="Copy game PDA"
-            >
-              {isCopied ? (
-                <span className="text-green-500">✓ copied</span>
-              ) : (
-                <>
-                  <span>{pdaShort}</span>
-                  <span className="ml-1 opacity-60">⎘</span>
-                </>
-              )}
-            </button>
+          <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontFamily: "'VT323', monospace", fontSize: 14, color: "var(--text-muted)" }}>ENTRY</div>
+              <div style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 10, marginTop: 5, color: "var(--navy)" }}>{feeSol} ◎</div>
+            </div>
+            <div>
+              <div style={{ fontFamily: "'VT323', monospace", fontSize: 14, color: "var(--text-muted)" }}>PLAYERS</div>
+              <div style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 10, marginTop: 5, color: "var(--navy)" }}>{account.playerCount}</div>
+            </div>
           </div>
+          <button onClick={(e) => copyPDA(e, pdaFull)} style={{ fontFamily: "'VT323', monospace", fontSize: 14, color: "var(--text-muted)", background: "transparent", border: "none", cursor: "pointer" }}>
+            {isCopied ? "✓ copied" : pdaShort + " ⎘"}
+          </button>
         </div>
       </Link>
     );
   }
 
-  // ── Main render ─────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-3">
-      {/* Search bar */}
-      <div className="relative">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by game address (PDA)…"
-          className="w-full bg-gray-950 border border-gray-800 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-700 font-mono focus:outline-none focus:border-gray-600"
-        />
-        {search && (
-          <button
-            onClick={() => setSearch("")}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400 text-xs"
-          >
-            ✕
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Tabs */}
+      <div style={{ display: "flex", border: "3px solid var(--navy)", boxShadow: "4px 4px 0 var(--navy)", background: "var(--lavender)", overflow: "hidden" }}>
+        {(["open", "history"] as const).map((tab) => (
+          <button key={tab} onClick={() => setActiveTab(tab)} style={{
+            flex: 1, padding: "12px 15px",
+            fontFamily: "'Press Start 2P', monospace", fontSize: 10,
+            border: "none", borderRight: tab === "open" ? "3px solid var(--navy)" : "none",
+            background: activeTab === tab ? "var(--navy)" : "transparent",
+            color: activeTab === tab ? "var(--yellow)" : "var(--navy)",
+            cursor: "pointer", letterSpacing: 0.5,
+          }}>
+            {tab === "open" ? `OPEN GAMES${allOpen.length > 0 ? ` (${allOpen.length})` : ""}` : `HISTORY${allPast.length > 0 ? ` (${allPast.length})` : ""}`}
           </button>
-        )}
+        ))}
       </div>
 
-      {/* Tabs — hidden when search is active (search shows all matching regardless of tab) */}
-      {!searchLower && (
-        <div className="flex gap-0 border border-gray-800 rounded overflow-hidden">
-          <button
-            onClick={() => setActiveTab("open")}
-            className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${
-              activeTab === "open"
-                ? "bg-gray-800 text-white"
-                : "bg-gray-950 text-gray-600 hover:text-gray-400"
-            }`}
-          >
-            Open {allOpen.length > 0 && `(${allOpen.length})`}
-          </button>
-          <button
-            onClick={() => setActiveTab("history")}
-            className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors border-l border-gray-800 ${
-              activeTab === "history"
-                ? "bg-gray-800 text-white"
-                : "bg-gray-950 text-gray-600 hover:text-gray-400"
-            }`}
-          >
-            History {allPast.length > 0 && `(${allPast.length})`}
-          </button>
-        </div>
-      )}
-
-      {/* Status bar */}
+      {/* Status */}
       {(refreshing || error) && (
-        <div className="flex items-center justify-between text-xs py-1">
-          {refreshing && !error && (
-            <span className="text-gray-600 flex items-center gap-1">
-              <span className="animate-spin inline-block w-2 h-2 border border-gray-700 border-t-gray-400 rounded-full" />
-              refreshing…
-            </span>
-          )}
-          {error && <span className="text-red-500">{error}</span>}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "'VT323', monospace", fontSize: 15 }}>
+          {refreshing && !error && <span style={{ color: "var(--text-muted)" }}>refreshing…</span>}
+          {error && <span style={{ color: "var(--red)" }}>{error}</span>}
           {error && (
-            <button
-              onClick={() => {
-                setError(null);
-                hasData.current = false;
-                setInitialLoading(true);
-                setRetryKey((k) => k + 1);
-              }}
-              className="text-gray-400 underline hover:text-gray-200 ml-2"
-            >
-              Retry
+            <button onClick={() => { setError(null); hasData.current = false; setInitialLoading(true); setRetryKey((k) => k + 1); }}
+              style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 9, background: "transparent", border: "none", color: "var(--navy)", cursor: "pointer", textDecoration: "underline" }}>
+              ↻ RETRY
             </button>
           )}
         </div>
       )}
 
-      {/* Search: no results at all */}
-      {searchLower && openGames.length === 0 && pastGames.length === 0 && (
-        <div className="text-gray-600 text-sm py-4 text-center">
-          No games found for that address.
-        </div>
-      )}
-
-      {/* No games at all (not a search result, just empty) */}
-      {!searchLower && games.length === 0 && !error && (
-        <div className="text-gray-500 text-sm py-4">
-          No games yet.{" "}
-          <Link href="/create" className="text-green-400 hover:underline">
-            Create one!
-          </Link>
-        </div>
-      )}
-
       {/* Open games */}
       {showOpen && (
-        <div className="space-y-2">
-          {searchLower && searchHasOpenOnly && (
-            <div className="text-xs text-gray-600 uppercase tracking-wider">
-              Open
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 16 }}>
+          {allOpen.length === 0 && !error && (
+            <div style={{ gridColumn: "1/-1", fontFamily: "'Press Start 2P', monospace", fontSize: 10, color: "var(--text-muted)", textAlign: "center", padding: "40px 0" }}>
+              NO OPEN GAMES<br />
+              <Link href="/create" style={{ color: "var(--yellow)", textDecoration: "none", fontSize: 9, display: "block", marginTop: 16 }}>+ HOST ONE ▶</Link>
             </div>
           )}
-          {openGames.length === 0 && !searchLower && (
-            <div className="text-gray-600 text-sm py-4 text-center">
-              No open games.{" "}
-              <Link href="/create" className="text-green-400 hover:underline">
-                Create one!
-              </Link>
-            </div>
-          )}
-          {openGames.map(({ pubkey, account }) => (
-            <GameCard
-              key={pubkey.toBase58()}
-              pubkey={pubkey}
-              account={account}
-              variant="open"
-            />
+          {allOpen.map(({ pubkey, account }) => (
+            <GameCard key={pubkey.toBase58()} pubkey={pubkey} account={account} variant="open" />
           ))}
         </div>
       )}
 
-      {/* History games */}
+      {/* History */}
       {showHistory && (
-        <div className="space-y-2">
-          {searchLower && pastGames.length > 0 && openGames.length > 0 && (
-            <div className="text-xs text-gray-600 uppercase tracking-wider mt-2">
-              History
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 16 }}>
+          {allPast.length === 0 && (
+            <div style={{ gridColumn: "1/-1", fontFamily: "'Press Start 2P', monospace", fontSize: 10, color: "var(--text-muted)", textAlign: "center", padding: "40px 0" }}>
+              NO PAST GAMES YET
             </div>
           )}
-          {pastGames.length === 0 && !searchLower && (
-            <div className="text-gray-600 text-sm py-4 text-center">
-              No past games yet.
-            </div>
-          )}
-          {pastGames.map(({ pubkey, account }) => (
-            <GameCard
-              key={pubkey.toBase58()}
-              pubkey={pubkey}
-              account={account}
-              variant="history"
-            />
+          {allPast.map(({ pubkey, account }) => (
+            <GameCard key={pubkey.toBase58()} pubkey={pubkey} account={account} variant="history" />
           ))}
         </div>
       )}
