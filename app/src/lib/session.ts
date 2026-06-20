@@ -1,7 +1,9 @@
 import { Connection, Keypair, PublicKey, TransactionInstruction, LAMPORTS_PER_SOL } from "@solana/web3.js"
 import { AnchorProvider, Program } from "@coral-xyz/anchor"
 import BN from "bn.js"
-import { PROGRAM_ID } from "./anchor"
+import { FLOW_PROGRAM_ADDRESS } from "@/generated/programs/flow"
+
+const PROGRAM_ID = new PublicKey(FLOW_PROGRAM_ADDRESS)
 import { l1Connection } from "./connections"
 
 export const SESSION_TOKEN_SEED = "session_token_v2"
@@ -40,6 +42,19 @@ export function getSessionTokenPDA(
   return pda
 }
 
+// SessionTokenV2 byte layout (after 8-byte discriminator):
+//   authority:      Pubkey @ offset 8
+//   target_program: Pubkey @ offset 40
+//   session_signer: Pubkey @ offset 72
+//   fee_payer:      Pubkey @ offset 104
+//   valid_until:    i64    @ offset 136
+const SESSION_TOKEN_V2_VALID_UNTIL_OFFSET = 136
+
+export function readSessionValidUntil(data: Buffer): number {
+  if (data.length < SESSION_TOKEN_V2_VALID_UNTIL_OFFSET + 8) return 0
+  return Number(data.readBigInt64LE(SESSION_TOKEN_V2_VALID_UNTIL_OFFSET))
+}
+
 export async function getSessionIdentity(
   walletPublicKey: PublicKey,
   connection: Connection = l1Connection
@@ -49,22 +64,49 @@ export async function getSessionIdentity(
     ? Number(localStorage.getItem(nonceKey) ?? "0")
     : 0
 
-  for (let attempts = 0; attempts < 25; attempts++) {
+  const now = Math.floor(Date.now() / 1000)
+
+  let firstExpiredKp: Keypair | null = null
+  let firstExpiredPDA: PublicKey | null = null
+  let firstExpiredNonce: number | null = null
+
+  for (let attempts = 0; attempts < 50; attempts++) {
     const sessionKp = deriveTempKeypair(walletPublicKey, String(nonce))
     const sessionPDA = getSessionTokenPDA(sessionKp, walletPublicKey)
     const info = await connection.getAccountInfo(sessionPDA)
 
-    if (!info || info.owner.equals(SESSION_PROGRAM_ID)) {
-      if (typeof window !== "undefined") {
-        localStorage.setItem(nonceKey, String(nonce))
+    if (!info) {
+      // Empty slot — ideal for a new session
+      if (typeof window !== "undefined") localStorage.setItem(nonceKey, String(nonce))
+      return { sessionKp, sessionPDA, exists: false }
+    }
+
+    if (info.owner.equals(SESSION_PROGRAM_ID)) {
+      const validUntil = readSessionValidUntil(info.data as Buffer)
+      if (validUntil > now) {
+        // Valid non-expired session found
+        if (typeof window !== "undefined") localStorage.setItem(nonceKey, String(nonce))
+        return { sessionKp, sessionPDA, exists: true }
       }
-      return { sessionKp, sessionPDA, exists: !!info }
+      // Expired — remember the first one as a fallback reuse slot
+      if (firstExpiredKp === null) {
+        firstExpiredKp = sessionKp
+        firstExpiredPDA = sessionPDA
+        firstExpiredNonce = nonce
+      }
     }
 
     nonce++
   }
 
-  throw new Error("Could not find an unused session PDA. Clear stale session data and try again.")
+  // All 50 scanned slots are taken by expired sessions.
+  // Jump to a large nonce that is astronomically unlikely to have a PDA.
+  // This acts as a one-time reset without touching existing on-chain accounts.
+  const resetNonce = Math.floor(Date.now() / 1000) // unix timestamp — globally unique
+  const resetKp = deriveTempKeypair(walletPublicKey, String(resetNonce))
+  const resetPDA = getSessionTokenPDA(resetKp, walletPublicKey)
+  if (typeof window !== "undefined") localStorage.setItem(nonceKey, String(resetNonce))
+  return { sessionKp: resetKp, sessionPDA: resetPDA, exists: false }
 }
 
 /** Returns the session keypair for a wallet (derives from localStorage nonce). */

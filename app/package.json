@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "codegen": "tsx scripts/codama.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
@@ -24,17 +25,22 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hook-form": "^7.79.0",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.14",
+    "@solana/program-client-core": "^6.10.0"
   },
   "devDependencies": {
+    "@codama/nodes-from-anchor": "^1.5.1",
+    "@codama/renderers-js": "^2.3.0",
     "@tailwindcss/postcss": "^4",
     "@types/bn.js": "^5.2.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "codama": "^1.8.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   },
   "ignoreScripts": [
@@ -44,5 +50,8 @@
   "trustedDependencies": [
     "sharp",
     "unrs-resolver"
-  ]
+  ],
+  "peerDependencies": {
+    "@solana/kit": "^6.10.0"
+  }
 }

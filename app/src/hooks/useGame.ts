@@ -1,66 +1,59 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
-import { PublicKey } from "@solana/web3.js"
-import { AnchorProvider } from "@coral-xyz/anchor"
-import { l1Connection, getErConnection } from "@/lib/connections"
-import { getProgram } from "@/lib/anchor"
+import { type Address } from "@solana/kit"
+import { fetchMaybeGameState } from "@/generated/accounts/gameState"
+import { l1Rpc, getErRpc } from "@/lib/rpc"
 import { GameState } from "@/types/game"
+import { GameStatus } from "@/generated/types/gameStatus"
 
-// Singletons — Program constructor is expensive (builds codecs synchronously)
-let _l1Program: ReturnType<typeof getProgram> | null = null
-function getL1Program() {
-  if (!_l1Program) {
-    const provider = new AnchorProvider(l1Connection, {} as any, { commitment: "confirmed" })
-    _l1Program = getProgram(provider)
-  }
-  return _l1Program
-}
-let _erProgram: ReturnType<typeof getProgram> | null = null
-function getErProgram() {
-  if (!_erProgram) {
-    const provider = new AnchorProvider(getErConnection(), {} as any, { commitment: "confirmed" })
-    _erProgram = getProgram(provider)
-  }
-  return _erProgram
-}
+async function fetchGameFromAny(address: Address): Promise<GameState | null> {
+  const [l1Acc, erAcc] = await Promise.all([
+    fetchMaybeGameState(l1Rpc, address).catch(() => null),
+    fetchMaybeGameState(getErRpc(), address).catch(() => null),
+  ])
 
-// Games in Waiting/Settled state live on L1.
-// Games in Active/Ended state are delegated to ER.
-// We try L1 first; if missing or delegated away, fall back to ER.
-async function fetchGameFromAny(gamePDA: PublicKey): Promise<GameState | null> {
-  const tryFetch = async (getP: () => ReturnType<typeof getProgram>) => {
-    try {
-      const program = getP()
-      return (await (program.account as any).gameState.fetch(gamePDA)) as GameState
-    } catch {
-      return null
-    }
-  }
+  const erData = erAcc?.exists ? erAcc.data : null
+  const l1Data = l1Acc?.exists ? l1Acc.data : null
 
-  const [l1Data, erData] = await Promise.all([tryFetch(getL1Program), tryFetch(getErProgram)])
-
-  // Prefer ER data when the game is active/ended there; otherwise use L1
-  if (erData && ("active" in erData.status || "ended" in erData.status)) return erData
+  // Settled is final — prefer from either source first
+  if (l1Data?.status === GameStatus.Settled) return l1Data
+  if (erData?.status === GameStatus.Settled) return erData
+  // ER is authoritative for active/ended state (live game)
+  if (erData && (erData.status === GameStatus.Active || erData.status === GameStatus.Ended)) return erData
+  // L1 fallback — but skip Waiting when there's no ER data at all (game is mid-commit,
+  // L1 still shows pre-delegation Waiting state while ER account is being undelegated)
+  if (l1Data && l1Data.status !== GameStatus.Waiting) return l1Data
   if (l1Data) return l1Data
   if (erData) return erData
   return null
 }
 
-export function useGame(gamePDA: PublicKey | null): { game: GameState | null; loading: boolean; refetch: () => void } {
+export function useGame(address: Address | null): { game: GameState | null; loading: boolean; refetch: () => void } {
   const [game, setGame] = useState<GameState | null>(null)
   const [loading, setLoading] = useState(false)
   const [tick, setTick] = useState(0)
   const hasDataRef = useRef(false)
 
   useEffect(() => {
-    if (!gamePDA) return
+    if (!address) return
     hasDataRef.current = false
     let cancelled = false
 
     async function fetchGame() {
-      const data = await fetchGameFromAny(gamePDA!)
+      const data = await fetchGameFromAny(address!)
       if (!cancelled) {
-        setGame(data)
+        setGame(prev => {
+          // Never downgrade from Ended/Settled to Waiting (ER→L1 commit propagation window)
+          if (
+            prev != null &&
+            data != null &&
+            (prev.status === GameStatus.Settled || prev.status === GameStatus.Ended) &&
+            data.status === GameStatus.Waiting
+          ) {
+            return prev
+          }
+          return data
+        })
         setLoading(false)
         hasDataRef.current = true
       }
@@ -70,7 +63,7 @@ export function useGame(gamePDA: PublicKey | null): { game: GameState | null; lo
     fetchGame()
     const id = setInterval(fetchGame, 1_000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [gamePDA?.toBase58(), tick])
+  }, [address, tick])
 
   const refetch = () => setTick(t => t + 1)
 

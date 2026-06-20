@@ -1,6 +1,8 @@
 import { PublicKey } from "@solana/web3.js"
 import BN from "bn.js"
-import { PROGRAM_ID } from "./anchor"
+import { FLOW_PROGRAM_ADDRESS } from "@/generated/programs/flow"
+
+const PROGRAM_ID = new PublicKey(FLOW_PROGRAM_ADDRESS)
 
 const GAME_SEED   = Buffer.from("game")
 const VAULT_SEED  = Buffer.from("vault")
