@@ -1,9 +1,17 @@
 import { PublicKey, TransactionSignature } from "@solana/web3.js";
 import BN from "bn.js";
 
-export function logTx(label: string, tx: TransactionSignature) {
+const L1_EXPLORER = "https://orbmarkets.io/tx";
+const ER_EXPLORER_BASE = "https://explorer.solana.com/tx";
+const ER_CUSTOM_URL = "https://devnet-as.magicblock.app";
+
+// Pass isEr=true for transactions sent to MagicBlock ER so the link opens the right explorer
+export function logTx(label: string, tx: string, isEr = false) {
+  const url = isEr
+    ? `${ER_EXPLORER_BASE}/${tx}?cluster=custom&customUrl=${ER_CUSTOM_URL}`
+    : `${L1_EXPLORER}/${tx}?cluster=devnet`;
   console.log(`\n✅ [${label}]`);
-  console.log(`   tx: https://orbmarkets.io/tx/${tx}?cluster=devnet`);
+  console.log(`   tx: ${url}`);
 }
 
 export function logAccount(label: string, pubkey: PublicKey) {

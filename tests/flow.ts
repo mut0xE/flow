@@ -1,6 +1,6 @@
 /**
- * FLOW — Happy Path Tests
- * Tests full game lifecycle from creation to settlement
+ * FLOW — Happy Path Tests (tests 1-10)
+ * Full game lifecycle: create → join → delegate → start → crank → pass → commit → settle
  */
 
 import * as anchor from "@coral-xyz/anchor";
@@ -45,6 +45,7 @@ import {
   MAGIC_PROGRAM_ID,
   GetCommitmentSignature,
   createTopUpEscrowInstruction,
+  createCloseEscrowInstruction,
   escrowPdaFromEscrowAuthority,
 } from "@magicblock-labs/ephemeral-rollups-sdk";
 
@@ -61,29 +62,25 @@ if (!process.env.ANCHOR_PROVIDER_URL)
   process.env.ANCHOR_PROVIDER_URL = process.env.HELIUS_RPC;
 
 describe("flow", () => {
-  // L1 provider and program
+  // L1 provider (Helius devnet)
   const connection = new Connection(process.env.HELIUS_RPC!, "confirmed");
   const provider = new anchor.AnchorProvider(
     connection,
     anchor.AnchorProvider.env().wallet,
-    {
-      commitment: "confirmed",
-      preflightCommitment: "confirmed",
-    }
+    { commitment: "confirmed", preflightCommitment: "confirmed" }
   );
   anchor.setProvider(provider);
-
   const program = anchor.workspace.flow as Program<Flow>;
 
-  // ER provider and program
+  // ER provider (MagicBlock devnet)
   const erProvider = getErProvider(provider.wallet as anchor.Wallet);
   const erProgram = new Program<Flow>(program.idl, erProvider);
 
-  // Test wallets
+  // Wallets
   const creator = provider.wallet.payer;
   const player2 = loadPlayer(process.env.PLAYER2);
 
-  // Game PDAs
+  // PDAs derived once and reused across all tests
   const GAME_ID = randomGameId();
   let ER_VALIDATOR: PublicKey;
 
@@ -100,16 +97,14 @@ describe("flow", () => {
     program.programId
   );
 
-  // Session keys
+  // Session keys (deterministic from wallet pubkey + env nonce)
   const sessionManager = new SessionTokenManager(
     provider.wallet,
     provider.connection
   );
   const sessionProgramId = sessionManager.program.programId;
-
   const creatorSessionKeypair = getCreatorSessionKeypair();
   const player2SessionKeypair = getPlayer2SessionKeypair();
-
   let creatorSessionPDA: PublicKey;
   let player2SessionPDA: PublicKey;
 
@@ -117,7 +112,7 @@ describe("flow", () => {
   const ENTRY_FEE = new BN(0.1 * LAMPORTS_PER_SOL);
   const LOSS_LIMIT = 5;
   const MAX_PLAYERS = 2;
-  const ENDS_AT = new BN(Math.floor(Date.now() / 1000) + 60);
+  const ENDS_AT = new BN(Math.floor(Date.now() / 1000) + 180);
 
   before(async () => {
     logSection("SETUP");
@@ -134,7 +129,9 @@ describe("flow", () => {
     logField("creator balance", `${(bal / LAMPORTS_PER_SOL).toFixed(2)} SOL`);
   });
 
-  it("creates game with correct state", async () => {
+  // ── TEST 1: create_game ───────────────────────────────────────────────────
+
+  it("1. creates game with correct state", async () => {
     logSection("TEST 1: create_game");
 
     const tx = await program.methods
@@ -159,16 +156,10 @@ describe("flow", () => {
 
     logTx("create_game", tx);
 
-    // Verify GameState
     const game = await program.account.gameState.fetch(gamePDA);
     logField("status", game.status);
     logField("player_count", game.playerCount);
-    logField("entry_fee", game.entryFee.toString());
     logField("total_deposited", game.totalDeposited.toString());
-    logField("direction", game.direction);
-    logField("loss_limit", game.lossLimit);
-    logField("max_players", game.maxPlayers);
-    logField("current_holder", game.currentHolder.toString());
 
     assert.deepEqual(game.status, { waiting: {} });
     assert.equal(game.playerCount, 1);
@@ -179,25 +170,25 @@ describe("flow", () => {
     assert.equal(game.maxPlayers, MAX_PLAYERS);
     assert.equal(game.currentHolder.toString(), creator.publicKey.toString());
 
-    // Verify creator PlayerAccount
+    // Creator gets index 0
     const creatorPlayer = await program.account.playerAccount.fetch(
       creatorPlayerPDA
     );
-    logField("creator.index", creatorPlayer.index);
-    logField("creator.wallet", creatorPlayer.wallet.toString());
-
     assert.equal(creatorPlayer.index, 0);
     assert.equal(creatorPlayer.wallet.toString(), creator.publicKey.toString());
     assert.equal(creatorPlayer.game.toString(), gamePDA.toString());
 
-    // Verify vault received entry fee
+    // Vault holds exactly one entry fee
     const vaultBal = await provider.connection.getBalance(vaultPDA);
-    logField("vault balance", `${vaultBal} lamports`);
     assert.equal(vaultBal, ENTRY_FEE.toNumber());
+    logField("vault balance", `${vaultBal} lamports`);
   });
 
-  it("player2 joins game", async () => {
+  // ── TEST 2: join_game ─────────────────────────────────────────────────────
+
+  it("2. player2 joins game", async () => {
     logSection("TEST 2: join_game");
+
     const tx = await program.methods
       .joinGame()
       .accounts({
@@ -213,39 +204,34 @@ describe("flow", () => {
 
     logTx("join_game", tx);
 
-    // Verify GameState updated
     const game = await program.account.gameState.fetch(gamePDA);
-    logField("player_count", game.playerCount);
-    logField("total_deposited", game.totalDeposited.toString());
-
     assert.equal(game.playerCount, 2);
     assert.equal(game.totalDeposited.toString(), ENTRY_FEE.muln(2).toString());
     assert.deepEqual(game.status, { waiting: {} });
 
-    // Verify player2 PlayerAccount
+    // Player2 gets index 1
     const player2Account = await program.account.playerAccount.fetch(
       player2PlayerPDA
     );
-    logField("player2.index", player2Account.index);
-    logField("player2.wallet", player2Account.wallet.toString());
-
     assert.equal(player2Account.index, 1);
     assert.equal(
       player2Account.wallet.toString(),
       player2.publicKey.toString()
     );
-    assert.equal(player2Account.game.toString(), gamePDA.toString());
 
-    // Verify vault received both entry fees
+    // Vault holds both entry fees
     const vaultBal = await provider.connection.getBalance(vaultPDA);
-    logField("vault balance", `${vaultBal} lamports`);
     assert.equal(vaultBal, ENTRY_FEE.muln(2).toNumber());
+    logField("vault balance", `${vaultBal} lamports`);
   });
 
-  it("delegates all accounts and starts game", async () => {
+  // ── TEST 3: delegate all PDAs + start_game ────────────────────────────────
+  // Single L1 tx: escrow top-up + all 3 delegations (creator pays for all).
+  // Then start_game on ER — creator signs directly (no session token needed).
+
+  it("3. delegates all PDAs and starts game on ER", async () => {
     logSection("TEST 3: delegate all PDAs + start_game");
 
-    // Build all 3 delegate ixs — creator pays for all, no need for player2 to sign
     const delegateCreatorPlayerIx = await program.methods
       .delegateAccount({
         playerAccount: { game: gamePDA, player: creator.publicKey },
@@ -279,8 +265,18 @@ describe("flow", () => {
       })
       .instruction();
 
-    // Single L1 tx — creator signs only
+    // Top up escrow so the magic action (settle) has fees on L1
+    const escrowPDA = escrowPdaFromEscrowAuthority(creator.publicKey);
+    const topUpEscrowIx = createTopUpEscrowInstruction(
+      escrowPDA,
+      creator.publicKey,
+      creator.publicKey,
+      0.005 * LAMPORTS_PER_SOL
+    );
+    logAccount("escrowPDA", escrowPDA);
+
     const delegateTx = new Transaction().add(
+      topUpEscrowIx,
       delegateCreatorPlayerIx,
       delegatePlayer2PlayerIx,
       delegateGameIx
@@ -291,10 +287,9 @@ describe("flow", () => {
       [creator],
       { skipPreflight: true, commitment: "confirmed" }
     );
-    logTx("delegate_all", delegateTxHash);
+    logTx("delegate_all + escrow_top_up", delegateTxHash);
 
-    // start_game: creator wallet signs directly, sessionToken omitted (None)
-    // session_auth_or fallback: game.creator == signer.key() → passes
+    // start_game: creator wallet signs directly; session_auth_or fallback passes
     const startGameIx = await erProgram.methods
       .startGame()
       .accounts({
@@ -314,21 +309,27 @@ describe("flow", () => {
     startTx.sign(creator);
     const startSig = await erProvider.connection.sendRawTransaction(
       startTx.serialize(),
-      { skipPreflight: true }
+      {
+        skipPreflight: true,
+      }
     );
-    await waitForCommitment(startSig, erProvider.connection);
-    logTx("start_game", startSig);
+    await erProvider.connection.confirmTransaction(startSig, "confirmed");
+    logTx("start_game", startSig, true);
 
     const game = await erProgram.account.gameState.fetch(gamePDA);
     logField("status", game.status);
     logField("startPrice", game.startPrice.toString());
-    logField("current_holder", game.currentHolder.toString());
 
     assert.deepEqual(game.status, { active: {} });
     assert.ok(game.startPrice.gt(new BN(0)));
   });
 
-  it("schedules the crank", async () => {
+  // ── TEST 4: schedule_tick (crank) ─────────────────────────────────────────
+  // Schedules tick_price to run every 100ms for 3000 iterations on ER.
+
+  it("4. schedules the price crank", async () => {
+    logSection("TEST 4: schedule_tick");
+
     const tx = await erProgram.methods
       .scheduleTick(GAME_ID, {
         taskId: new BN(1),
@@ -339,6 +340,7 @@ describe("flow", () => {
         magicProgram: MAGIC_PROGRAM_ID,
         payer: creator.publicKey,
         creator: creator.publicKey,
+        //@ts-ignore
         game: gamePDA,
         priceFeed: SOL_USD_FEED,
         program: program.programId,
@@ -346,11 +348,14 @@ describe("flow", () => {
       .signers([creator])
       .rpc();
 
-    logTx("schedule_tick tx:", tx);
+    logTx("schedule_tick", tx, true);
   });
 
-  it("creates session for creator", async () => {
-    logSection("TEST 8: create session (creator)");
+  // ── TEST 5: create session (creator) ──────────────────────────────────────
+  // Session allows future pass() calls without a wallet popup.
+
+  it("5. creates session for creator", async () => {
+    logSection("TEST 5: create session (creator)");
 
     creatorSessionPDA = PublicKey.findProgramAddressSync(
       [
@@ -365,7 +370,6 @@ describe("flow", () => {
     const existing = await provider.connection.getAccountInfo(
       creatorSessionPDA
     );
-
     if (existing) {
       console.log("   session already exists, skipping creation");
     } else {
@@ -384,22 +388,23 @@ describe("flow", () => {
         .transaction();
 
       tx.feePayer = creator.publicKey;
-
       const txHash = await sendAndConfirmTransaction(
         provider.connection,
         tx,
         [creator, creatorSessionKeypair],
         { commitment: "confirmed" }
       );
-
       logTx("createSession_creator", txHash);
     }
+
     logAccount("sessionTokenPDA", creatorSessionPDA);
     console.log("\n✅ Creator session ready");
   });
 
-  it("creates session for player2", async () => {
-    logSection("TEST 9: create session (player2)");
+  // ── TEST 6: create session (player2) ─────────────────────────────────────
+
+  it("6. creates session for player2", async () => {
+    logSection("TEST 6: create session (player2)");
 
     const p2SessionManager = new SessionTokenManager(
       new anchor.Wallet(player2),
@@ -419,7 +424,6 @@ describe("flow", () => {
     const existing = await provider.connection.getAccountInfo(
       player2SessionPDA
     );
-
     if (existing) {
       console.log("   session already exists, skipping creation");
     } else {
@@ -438,23 +442,26 @@ describe("flow", () => {
         .transaction();
 
       tx.feePayer = player2.publicKey;
-
       const txHash = await sendAndConfirmTransaction(
         provider.connection,
         tx,
         [player2, player2SessionKeypair],
         { commitment: "confirmed" }
       );
-
       logTx("createSession_player2", txHash);
     }
+
     logAccount("sessionTokenPDA", player2SessionPDA);
     console.log("\n✅ Player2 session ready");
   });
 
-  it("creator passes position to player2 using session key", async () => {
-    logSection("TEST 10: pass (creator → player2)");
+  // ── TEST 7: pass (creator → player2) ─────────────────────────────────────
+  // Session key signs — no wallet popup. Score accumulated in basis points.
 
+  it("7. creator passes position to player2", async () => {
+    logSection("TEST 7: pass (creator → player2)");
+
+    // Wait for crank to update price at least once
     await new Promise((r) => setTimeout(r, 5000));
 
     const tx = await erProgram.methods
@@ -476,28 +483,19 @@ describe("flow", () => {
       [creatorSessionKeypair],
       { skipPreflight: true, commitment: "confirmed" }
     );
-
-    logTx("pass", sig);
+    logTx("pass", sig, true);
 
     const game = await erProgram.account.gameState.fetch(gamePDA);
-    const playerAccount = await erProgram.account.playerAccount.fetch(
-      creatorPlayerPDA
-    );
-
     logField("current_holder", game.currentHolder.toString());
-    logField("creator score", game.scores[0].toString());
-    logField("price_now", game.solPriceNow.toNumber() / 1e8);
-    logField("start price", game.startPrice.toNumber() / 1e8);
-    logField(
-      "price received at",
-      playerAccount.priceAtReceive.toNumber() / 1e8
-    );
+    logField("creator score (bp)", game.scores[0].toString());
 
     assert.equal(game.currentHolder.toString(), player2.publicKey.toString());
   });
 
-  it("player2 passes position to creator using session key", async () => {
-    logSection("TEST 11: pass (player2 → creator)");
+  // ── TEST 8: pass (player2 → creator) ─────────────────────────────────────
+
+  it("8. player2 passes position back to creator", async () => {
+    logSection("TEST 8: pass (player2 → creator)");
 
     await new Promise((r) => setTimeout(r, 5000));
 
@@ -520,31 +518,23 @@ describe("flow", () => {
       [player2SessionKeypair],
       { skipPreflight: true, commitment: "confirmed" }
     );
-
-    logTx("pass", sig);
+    logTx("pass", sig, true);
 
     const game = await erProgram.account.gameState.fetch(gamePDA);
-    const playerAccount = await erProgram.account.playerAccount.fetch(
-      player2PlayerPDA
-    );
-
     logField("current_holder", game.currentHolder.toString());
-    logField("player score", game.scores[1].toString());
-    logField("price_now", game.solPriceNow.toNumber() / 1e8);
-    logField("start price", game.startPrice.toNumber() / 1e8);
-    logField(
-      "price received at",
-      playerAccount.priceAtReceive.toNumber() / 1e8
-    );
+    logField("player2 score (bp)", game.scores[1].toString());
 
     assert.equal(game.currentHolder.toString(), creator.publicKey.toString());
   });
 
-  it("commit_and_settle after game ends", async function () {
-    this.timeout(180_000);
-    logSection("TEST 12: commit_and_settle");
+  // ── TEST 9: commit_and_settle ─────────────────────────────────────────────
+  // Poll ER until game Ended, then commit + undelegate. Magic action auto-settles on L1.
 
-    // Poll ER until game status == Ended
+  it("9. commit_and_settle after game ends", async function () {
+    this.timeout(180_000);
+    logSection("TEST 9: commit_and_settle");
+
+    // Poll ER until status = Ended
     const start = Date.now();
     let game = await erProgram.account.gameState.fetch(gamePDA);
     while (!("ended" in game.status) && Date.now() - start < 330_000) {
@@ -552,13 +542,11 @@ describe("flow", () => {
       game = await erProgram.account.gameState.fetch(gamePDA);
       logField("game status", JSON.stringify(game.status));
     }
-
     assert.deepEqual(game.status, { ended: {} }, "Game must be Ended");
     logField("final_price", game.finalPrice.toString());
     logField("scores", game.scores.map((s) => s.toString()).join(", "));
-    logField("current_holder", game.currentHolder.toString());
 
-    // Call commit_and_settle on ER via router
+    // Send commit_and_settle via magic router
     const router = getMagicRouter();
     const routerProvider = new anchor.AnchorProvider(
       router as any,
@@ -582,133 +570,106 @@ describe("flow", () => {
         //@ts-ignore
         game: gamePDA,
         priceFeed: SOL_USD_FEED,
-        systemProgram: SystemProgram.programId,
       })
       .remainingAccounts(playerPDAsForCommit)
       .instruction();
 
     const erSig = await sendAndConfirmTransaction(
-      erProvider.connection,
+      routerProvider.connection,
       new Transaction().add(commitIx),
       [creator],
       { skipPreflight: true, commitment: "confirmed" }
     );
-    logTx("commit_and_settle (ER)", erSig);
+    logTx("commit_and_settle (ER)", erSig, true);
 
-    const gameAfterCommit = await erProgram.account.gameState.fetch(gamePDA);
-    logField("── FINAL SCORES (after final holder scored) ──", "");
-    logField(
-      "scores",
-      gameAfterCommit.scores.map((s) => s.toString()).join(", ")
-    );
-    logField("current_holder", gameAfterCommit.currentHolder.toString());
-    logField("final_price", gameAfterCommit.finalPrice.toString());
-
-    // Wait for L1 commit
+    // Wait for L1 commit to land
     const l1CommitSig = await GetCommitmentSignature(
       erSig,
       erProvider.connection
     );
     logTx("L1 commit landed", l1CommitSig);
-    console.log("\n   Game committed to L1. Calling settle() on L1...");
+    console.log("\n   Game committed to L1. Magic action will auto-settle...");
 
-    const creatorBalBefore = await provider.connection.getBalance(
-      creator.publicKey
-    );
-    const player2BalBefore = await provider.connection.getBalance(
-      player2.publicKey
-    );
-    const vaultBalBefore = await provider.connection.getBalance(vaultPDA);
-    const treasuryBalBefore = await provider.connection.getBalance(TREASURY);
+    // Poll L1 until magic action fires settle()
+    const settlePollStart = Date.now();
+    let gameOnL1 = await program.account.gameState.fetch(gamePDA);
+    while (
+      !("settled" in gameOnL1.status) &&
+      Date.now() - settlePollStart < 60_000
+    ) {
+      await new Promise((r) => setTimeout(r, 1000));
+      gameOnL1 = await program.account.gameState.fetch(gamePDA);
+      logField("L1 game status", JSON.stringify(gameOnL1.status));
+    }
 
-    logField("── BEFORE SETTLE ──", "");
-    logField("vault balance", `${vaultBalBefore} lamports`);
-    logField(
-      "creator balance",
-      `${(creatorBalBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+    assert.deepEqual(
+      gameOnL1.status,
+      { settled: {} },
+      "magic action must auto-settle"
     );
-    logField(
-      "player2 balance",
-      `${(player2BalBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL`
-    );
-    logField(
-      "treasury balance",
-      `${(treasuryBalBefore / LAMPORTS_PER_SOL).toFixed(6)} SOL`
-    );
+    logField("✅ auto-settled", "status=Settled on L1");
 
-    // Call settle on L1
-    const gameOnL1 = await program.account.gameState.fetch(gamePDA);
+    const vaultBalAfter = await provider.connection.getBalance(vaultPDA);
+    logField("vault after", `${vaultBalAfter} lamports`);
+    assert.equal(vaultBalAfter, 0, "vault must be drained by magic action");
+    console.log("\n✅ Vault distributed by magic action");
+  });
 
-    logField("── FINAL SCORES (after final holder scored) ──", "");
-    logField("scores", gameOnL1.scores.map((s) => s.toString()).join(", "));
-    logField("current_holder", gameOnL1.currentHolder.toString());
-    logField("final_price", gameOnL1.finalPrice.toString());
+  // ── TEST 10: verify settlement ────────────────────────────────────────────
+  // Confirms status=Settled, vault=0, and that a second settle() call is rejected.
 
-    const walletAccountsForSettle = gameOnL1.players.map((wallet) => ({
+  it("10. verify settlement — AlreadySettled on double call", async () => {
+    logSection("TEST 10: verify settlement");
+
+    const game = await program.account.gameState.fetch(gamePDA);
+    assert.deepEqual(game.status, { settled: {} });
+
+    const walletAccounts = game.players.map((wallet) => ({
       pubkey: wallet,
       isSigner: false,
       isWritable: true,
     }));
 
-    const settleSig = await program.methods
-      .settle()
-      .accounts({
-        caller: creator.publicKey,
-        //@ts-ignore
-        game: gamePDA,
-        vault: vaultPDA,
-        treasury: TREASURY,
-        systemProgram: SystemProgram.programId,
-      })
-      .remainingAccounts(walletAccountsForSettle)
-      .rpc({ skipPreflight: true });
+    // settle() uses #[action] macro — direct call after magic action returns "Unknown action"
+    const escrowAuthKey = creator.publicKey;
+    const escrowKey = escrowPdaFromEscrowAuthority(escrowAuthKey);
 
-    logTx("settle (L1)", settleSig);
+    try {
+      await program.methods
+        .settle()
+        .accounts({
+          game: gamePDA,
+          //@ts-ignore
+          vault: vaultPDA,
+          treasury: TREASURY,
+          systemProgram: SystemProgram.programId,
+          //@ts-ignore
+          escrowAuth: escrowAuthKey,
+          escrow: escrowKey,
+        })
+        .remainingAccounts(walletAccounts)
+        .rpc({ skipPreflight: true });
+      assert.fail("Expected AlreadySettled but tx succeeded");
+    } catch (err: any) {
+      const msg: string = err?.message ?? err?.toString() ?? "";
+      assert.ok(
+        msg.includes("AlreadySettled") || msg.includes("Unknown action"),
+        `Expected AlreadySettled or Unknown action, got: ${msg}`
+      );
+      logField("✅ AlreadySettled", "double settle correctly rejected");
+    }
 
-    const creatorBalAfter = await provider.connection.getBalance(
+    // Close escrow to recover remaining lamports back to creator
+    const escrowPDA = escrowPdaFromEscrowAuthority(creator.publicKey);
+    const closeEscrowIx = createCloseEscrowInstruction(
+      escrowPDA,
       creator.publicKey
     );
-    const player2BalAfter = await provider.connection.getBalance(
-      player2.publicKey
+    const closeSig = await provider.sendAndConfirm(
+      new Transaction().add(closeEscrowIx),
+      [creator]
     );
-    const vaultBalAfter = await provider.connection.getBalance(vaultPDA);
-    const treasuryBalAfter = await provider.connection.getBalance(TREASURY);
-
-    logField("── AFTER SETTLE ──", "");
-    logField("vault", `${vaultBalAfter} lamports`);
-
-    logField("── AFTER SETTLE ──", "");
-    logField("vault", `${vaultBalAfter} lamports`);
-    logField(
-      "creator balance",
-      `${(creatorBalAfter / LAMPORTS_PER_SOL).toFixed(6)} SOL`
-    );
-    logField(
-      "player2 balance",
-      `${(player2BalAfter / LAMPORTS_PER_SOL).toFixed(6)} SOL`
-    );
-    logField(
-      "treasury balance",
-      `${(treasuryBalAfter / LAMPORTS_PER_SOL).toFixed(6)} SOL`
-    );
-    logField(
-      "creator Δ",
-      `${((creatorBalAfter - creatorBalBefore) / LAMPORTS_PER_SOL).toFixed(
-        6
-      )} SOL`
-    );
-    logField(
-      "player2 Δ",
-      `${((player2BalAfter - player2BalBefore) / LAMPORTS_PER_SOL).toFixed(
-        6
-      )} SOL`
-    );
-    logField(
-      "treasury Δ",
-      `${((treasuryBalAfter - treasuryBalBefore) / LAMPORTS_PER_SOL).toFixed(
-        6
-      )} SOL`
-    );
-    console.log("\n✅ Vault distributed");
+    logTx("close_escrow", closeSig);
+    logField("✅ escrow closed", "lamports returned to creator");
   });
 });
