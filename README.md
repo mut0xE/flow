@@ -8,7 +8,7 @@ A real-time on-chain game where players compete by holding a virtual position th
 | | |
 |---|---|
 | Network | Solana Devnet |
-| Program ID | `DqudaX63SvHn6LLe4SERwxNoiLvyLNfjYjgAVcjH9szp` |
+| Program ID | `FLow6TWEujiuPETHJ1EiYCgDTkoSaVmuxXbxfxQvnNJR` |
 | ER RPC | `https://devnet.magicblock.app` |
 | L1 RPC | Helius Devnet |
 
@@ -113,7 +113,13 @@ yarn install
 
 ### Environment
 
-Create a `.env` file in the project root:
+**For the frontend** — create `app/.env.local`:
+
+```env
+NEXT_PUBLIC_HELIUS_RPC=https://devnet.helius-rpc.com/?api-key=YOUR_KEY
+```
+
+**For tests** — create a `.env` file in the project root:
 
 ```env
 HELIUS_RPC=https://devnet.helius-rpc.com/?api-key=YOUR_KEY
